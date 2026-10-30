@@ -1,64 +1,111 @@
 
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101014">
-  <title>ReelNarrator — AI Movie Recap Studio</title>
+  <title>ReelNarrator — AI Video Editor</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="/">REEL<span>NARRATOR</span></a>
-    <span class="tag">AI MOVIE RECAP STUDIO</span>
-  </header>
-  <main>
-    <section class="hero">
-      <p class="eyebrow">TURN SCENES INTO STORIES</p>
-      <h1>Your movie.<br><span>Your narration.</span></h1>
-      <p class="sub">Create an original, chronological movie recap script, then turn it into voice narration.</p>
-    </section>
-    <section class="panel">
-      <div class="tabs">
-        <button class="tab active" data-tab="upload">Upload movie</button>
-        <button class="tab" data-tab="youtube">YouTube link</button>
+
+<header class="topbar">
+  <a class="brand" href="/">REEL<span>NARRATOR</span></a>
+  <span class="tag">AI SHORTS STUDIO</span>
+</header>
+
+<main>
+
+  <section class="hero">
+    <p class="eyebrow">YOUR VIDEO. REIMAGINED.</p>
+    <h1>Turn long videos into<br><span>engaging Shorts.</span></h1>
+    <p class="sub">
+      Let AI analyse your video, find interesting moments
+      and arrange them into a vertical Short.
+    </p>
+  </section>
+
+  <section class="panel">
+    <div class="sectionHead">
+      <div>
+        <p class="eyebrow">START CREATING</p>
+        <h2>Upload your video</h2>
       </div>
-      <div id="uploadPane" class="pane">
-        <label class="dropzone" for="movieFile">
-          <span class="uploadIcon">↑</span>
-          <strong>Choose a video file</strong>
-          <span>MP4, MOV and other supported video formats</span>
-          <small id="fileName">Maximum upload size depends on hosting settings.</small>
-        </label>
-        <input id="movieFile" type="file" accept="video/*" hidden>
-        <button id="uploadBtn" class="primary">Analyse movie & create script</button>
+    </div>
+
+    <label class="dropzone" for="movieFile">
+      <span class="uploadIcon">↑</span>
+      <strong>Choose a video file</strong>
+      <span>Select a video from your device</span>
+      <small id="fileName">
+        Supported formats depend on the server.
+      </small>
+    </label>
+
+    <input
+      id="movieFile"
+      type="file"
+      accept="video/*"
+      hidden
+    >
+
+    <button id="uploadBtn" class="primary">
+      Analyse video & create Short
+    </button>
+
+    <p id="status" class="status" aria-live="polite"></p>
+  </section>
+
+  <section class="panel">
+    <div class="sectionHead">
+      <div>
+        <p class="eyebrow">NARRATION WORKSPACE</p>
+        <h2>Your script</h2>
       </div>
-      <div id="youtubePane" class="pane hidden">
-        <label for="youtubeUrl">Public YouTube video URL</label>
-        <input id="youtubeUrl" class="field" type="url" placeholder="https://www.youtube.com/watch?v=...">
-        <p class="hint">Gemini's YouTube URL support has availability and content restrictions. This does not download the video.</p>
-        <button id="youtubeBtn" class="primary">Analyse link & create script</button>
+      <button id="copyBtn" class="secondary">
+        Copy script
+      </button>
+    </div>
+
+    <textarea
+      id="script"
+      class="script"
+      placeholder="You can write or paste your narration here..."
+      spellcheck="true"
+    ></textarea>
+
+    <div class="voiceRow">
+      <div class="voiceInfo">
+        <strong>AI voice generation</strong>
+        <span>Requires a configured voice API key.</span>
       </div>
-      <p id="status" class="status" aria-live="polite"></p>
-    </section>
-    <section class="panel resultPanel">
-      <div class="sectionHead">
-        <div><p class="eyebrow">YOUR SCRIPT</p><h2>Narration workspace</h2></div>
-        <button id="copyBtn" class="secondary">Copy script</button>
-      </div>
-      <textarea id="script" class="script" placeholder="Your generated narration will appear here. You can also paste or edit your own script..." spellcheck="true"></textarea>
-      <div class="voiceRow">
-        <div class="voiceInfo"><strong>Natural AI voice</strong><span>Powered by ElevenLabs when your server key is configured.</span></div>
-        <button id="voiceBtn" class="primary small">Generate voice</button>
-      </div>
-      <audio id="audio" controls class="audio hidden"></audio>
-      <a id="downloadAudio" class="download hidden" download="reelnarrator.mp3">Download narration audio</a>
-    </section>
-    <footer>
-      <p>ReelNarrator starter • Keep API keys private • Only upload or analyse videos you have permission to use.</p>
-    </footer>
-  </main>
-  <script src="/app.js"></script>
+
+      <button id="voiceBtn" class="primary small">
+        Generate voice
+      </button>
+    </div>
+
+    <audio id="audio" controls class="audio hidden"></audio>
+
+    <a
+      id="downloadAudio"
+      class="download hidden"
+      download="reelnarrator.mp3"
+    >
+      Download narration audio
+    </a>
+  </section>
+
+  <footer>
+    <p>
+      ReelNarrator • AI video editing studio.
+      Only upload videos you own or have permission to use.
+    </p>
+  </footer>
+
+</main>
+
+<script src="/app.js"></script>
 </body>
 </html>
