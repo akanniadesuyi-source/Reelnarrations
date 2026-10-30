@@ -1,499 +1,528 @@
-
 import express from "express";
 import multer from "multer";
-import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import ffmpegPath from "ffmpeg-static";
-import path from "node:path";
+import fs from "node:fs";
 import os from "node:os";
-import fs from "node:fs/promises";
+import path from "node:path";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
-
-dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000;
-const maxMb = Number(process.env.MAX_UPLOAD_MB || 100);
+const PORT = process.env.PORT || 3000;
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 100);
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
-app.use(express.json({ limit: "1mb" }));
-app.use(express.static(path.join(__dirname, "public")));
+const API_KEY = process.env.GEMINI_API_KEY;
+
+const ai = API_KEY ? new GoogleGenAI({ apiKey: API_KEY }) : null;
+
+app.use(express.json());
+app.use(express.static("public"));
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: maxMb * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith("video/")) cb(null, true);
-    else cb(new Error("Please upload a video file."));
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+  fileFilter(req, file, callback) {
+    if (!file.mimetype.startsWith("video/")) {
+      return callback(new Error("Please upload a video file."));
+    }
+    callback(null, true);
   }
 });
 
 const jobs = new Map();
 
-function getAI() {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not configured.");
-  }
-
-  return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-}
-
-function updateJob(id, stage, progress, message) {
+function updateJob(id, values) {
   const job = jobs.get(id);
   if (!job) return;
 
-  job.stage = stage;
-  job.progress = progress;
-  job.message = message;
-  job.updatedAt = Date.now();
+  Object.assign(job, values, {
+    updatedAt: new Date().toISOString()
+  });
 }
 
-function runFFmpeg(args) {
+function runCommand(command, args, onProgress) {
   return new Promise((resolve, reject) => {
-    if (!ffmpegPath) {
-      return reject(new Error("FFmpeg is unavailable."));
-    }
+    const child = spawn(command, args, {
+      stdio: ["ignore", "ignore", "pipe"]
+    });
 
-    const child = spawn(ffmpegPath, args);
-    let errorText = "";
+    let errorOutput = "";
 
-    child.stderr.on("data", chunk => {
-      errorText += chunk.toString();
-      if (errorText.length > 10000) {
-        errorText = errorText.slice(-10000);
-      }
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      errorOutput += text;
+
+      if (onProgress) onProgress(text);
     });
 
     child.on("error", reject);
 
-    child.on("close", code => {
-      if (code === 0) resolve();
-      else reject(new Error(
-        `Video rendering failed: ${errorText.slice(-1200)}`
-      ));
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(
+          new Error(
+            `Video processing failed. ${errorOutput.slice(-1200)}`
+          )
+        );
+      }
     });
   });
 }
 
-function parseAIJson(text) {
+function parseAIResponse(response) {
+  const text =
+    typeof response.text === "function"
+      ? response.text()
+      : response.text;
+
+  if (!text) {
+    throw new Error("Gemini returned an empty analysis.");
+  }
+
   const cleaned = text
-    .replace(/^```(?:json)?/i, "")
-    .replace(/```$/i, "")
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
     .trim();
 
-  const first = cleaned.indexOf("{");
-  const last = cleaned.lastIndexOf("}");
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
 
-  if (first < 0 || last < first) {
-    throw new Error("AI returned an invalid clip selection.");
+  if (start === -1 || end === -1) {
+    throw new Error("Gemini did not return valid JSON.");
   }
 
-  return JSON.parse(cleaned.slice(first, last + 1));
-}
-
-async function analyseVideo(videoPath, mimeType, jobId) {
-  updateJob(jobId, "analysing", 25, "AI is analysing your video.");
-
-  const ai = getAI();
-
-  const uploaded = await ai.files.upload({
-    file: videoPath,
-    config: { mimeType }
-  });
-
-  if (!uploaded.name || !uploaded.uri) {
-    throw new Error("Gemini could not upload the video for analysis.");
-  }
-
-  let file = uploaded;
-
-  for (let attempt = 0; attempt < 30; attempt++) {
-    if (file.state === "ACTIVE") break;
-
-    if (file.state === "FAILED") {
-      throw new Error("Gemini could not process this video.");
-    }
-
-    updateJob(
-      jobId,
-      "analysing",
-      30,
-      "Preparing video for AI analysis."
-    );
-
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    file = await ai.files.get({ name: uploaded.name });
-  }
-
-  if (file.state !== "ACTIVE") {
-    throw new Error("Video analysis preparation timed out.");
-  }
-
-  const result = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: [
-      {
-        fileData: {
-          fileUri: uploaded.uri,
-          mimeType
-        }
-      },
-      {
-        text: `
-Find 2 to 6 interesting moments in this video for one coherent YouTube Short.
-
-Keep the moments in chronological order.
-Choose moments that connect into a clear mini-story.
-Each moment must be 3 to 15 seconds.
-Total selected duration must be between 20 and 55 seconds.
-Use only moments actually present in the video.
-
-Return only JSON:
-{
-  "title": "Suggested Short title",
-  "clips": [
-    {
-      "start": 10,
-      "end": 18,
-      "reason": "Why this moment is interesting"
-    }
-  ]
-}
-
-Timestamps must be seconds from the start of the video.
-If suitable moments cannot be identified, return:
-{"title":"","clips":[]}
-`
-      }
-    ]
-  });
-
-  return parseAIJson(result.text || "");
+  return JSON.parse(cleaned.slice(start, end + 1));
 }
 
 function validateClips(clips) {
-  if (!Array.isArray(clips)) {
-    throw new Error("No clip selections were returned.");
+  if (!Array.isArray(clips) || clips.length < 2) {
+    throw new Error("AI could not find enough useful scenes.");
   }
 
-  const selected = clips
-    .filter(clip =>
-      Number.isFinite(Number(clip.start)) &&
-      Number.isFinite(Number(clip.end)) &&
-      Number(clip.start) >= 0 &&
-      Number(clip.end) > Number(clip.start) &&
-      Number(clip.end) - Number(clip.start) >= 3 &&
-      Number(clip.end) - Number(clip.start) <= 15
-    )
-    .slice(0, 6)
-    .map(clip => ({
-      start: Number(clip.start),
-      end: Number(clip.end),
-      reason: String(clip.reason || "Selected highlight")
-    }))
-    .sort((a, b) => a.start - b.start);
+  const valid = clips.map((clip) => ({
+    start: Number(clip.start),
+    end: Number(clip.end),
+    reason: String(clip.reason || "Selected scene")
+  }));
 
-  const total = selected.reduce(
+  for (const clip of valid) {
+    if (
+      !Number.isFinite(clip.start) ||
+      !Number.isFinite(clip.end) ||
+      clip.start < 0 ||
+      clip.end <= clip.start ||
+      clip.end - clip.start < 2 ||
+      clip.end - clip.start > 25
+    ) {
+      throw new Error("AI returned invalid scene timestamps.");
+    }
+  }
+
+  valid.sort((a, b) => a.start - b.start);
+
+  const total = valid.reduce(
     (sum, clip) => sum + clip.end - clip.start,
     0
   );
 
-  if (selected.length < 2 || total < 20 || total > 60) {
-    throw new Error(
-      "AI could not find enough suitable moments. Try another video."
-    );
+  if (total < 10 || total > 90) {
+    throw new Error("AI selected an unsuitable total video length.");
   }
 
-  return selected;
+  return valid;
 }
 
-async function renderShort(inputPath, clips, workDir, jobId) {
-  const segmentPaths = [];
+async function analyseVideo(filePath, mimeType, jobId) {
+  updateJob(jobId, {
+    stage: "analysing",
+    progress: 15,
+    message: "Uploading video to Gemini for analysis..."
+  });
+
+  const uploaded = await ai.files.upload({
+    file: filePath,
+    config: { mimeType }
+  });
+
+  if (!uploaded.name) {
+    throw new Error("Gemini did not provide a video file reference.");
+  }
+
+  let file = uploaded;
+  const startedAt = Date.now();
+  const maxWait = 5 * 60 * 1000;
+
+  while (true) {
+    const state = String(file.state || "").toUpperCase();
+
+    if (state.includes("ACTIVE")) break;
+
+    if (state.includes("FAILED")) {
+      throw new Error("Gemini could not process the uploaded video.");
+    }
+
+    if (Date.now() - startedAt > maxWait) {
+      throw new Error(
+        `Gemini video processing timed out. Last state: ${state || "UNKNOWN"}`
+      );
+    }
+
+    const elapsed = Date.now() - startedAt;
+    const progress = Math.min(35, 18 + Math.floor(elapsed / 15000));
+
+    updateJob(jobId, {
+      progress,
+      message: `Gemini is preparing the video. Status: ${state || "PROCESSING"}`
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+
+    file = await ai.files.get({ name: uploaded.name });
+  }
+
+  updateJob(jobId, {
+    progress: 38,
+    message: "Video ready. AI is finding the strongest scenes..."
+  });
+
+  const prompt = `
+You are an expert movie and video editor.
+
+Analyse the supplied video and select the strongest scenes for a short,
+coherent video recap.
+
+Rules:
+- Select 2 to 6 scenes.
+- Keep scenes in chronological order.
+- Do not invent scenes or events.
+- Choose moments that make sense when watched together.
+- Avoid unnecessary repeated footage.
+- Each scene should be between 3 and 15 seconds.
+- Aim for a total duration between 20 and 55 seconds.
+- Timestamps must refer to the original video.
+- The clips must not extend beyond the supplied video.
+
+Return ONLY valid JSON in this exact structure:
+
+{
+  "clips": [
+    {
+      "start": 10.0,
+      "end": 18.0,
+      "reason": "A short explanation of why this moment matters"
+    }
+  ]
+}
+`;
+
+  updateJob(jobId, {
+    progress: 42,
+    message: "AI is analysing the scenes and choosing clips..."
+  });
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            fileData: {
+              fileUri: file.uri,
+              mimeType: file.mimeType || mimeType
+            }
+          },
+          { text: prompt }
+        ]
+      }
+    ]
+  });
+
+  const result = parseAIResponse(response);
+  const clips = validateClips(result.clips);
+
+  return { clips, uploadedFileName: uploaded.name };
+}
+
+async function renderShort(inputPath, clips, outputPath, jobId) {
+  const directory = path.dirname(outputPath);
+  const clipFiles = [];
+
+  updateJob(jobId, {
+    stage: "rendering",
+    progress: 65,
+    message: "Preparing selected scenes for rendering..."
+  });
 
   for (let i = 0; i < clips.length; i++) {
     const clip = clips[i];
+    const clipPath = path.join(directory, `clip-${i}.mp4`);
 
-    updateJob(
-      jobId,
-      "rendering",
-      55 + Math.round((i / clips.length) * 30),
-      `Rendering selected moment ${i + 1} of ${clips.length}.`
-    );
+    const duration = clip.end - clip.start;
 
-    const segmentPath = path.join(workDir, `clip-${i}.mp4`);
+    updateJob(jobId, {
+      progress: 65 + Math.floor((i / clips.length) * 20),
+      message: `Rendering selected scene ${i + 1} of ${clips.length}...`
+    });
 
-    await runFFmpeg([
+    await runCommand(ffmpegPath, [
       "-y",
       "-ss", String(clip.start),
       "-i", inputPath,
-      "-t", String(clip.end - clip.start),
+      "-t", String(duration),
       "-vf",
-      "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-      "-an",
-      "-r", "30",
+      "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
       "-c:v", "libx264",
       "-preset", "ultrafast",
-      "-crf", "23",
-      "-pix_fmt", "yuv420p",
+      "-crf", "26",
+      "-an",
       "-movflags", "+faststart",
-      segmentPath
+      clipPath
     ]);
 
-    segmentPaths.push(segmentPath);
+    clipFiles.push(clipPath);
   }
 
-  updateJob(jobId, "rendering", 90, "Joining the selected moments.");
+  updateJob(jobId, {
+    progress: 87,
+    message: "Joining selected scenes into your finished video..."
+  });
 
-  const listPath = path.join(workDir, "clips.txt");
+  const listPath = path.join(directory, "clips.txt");
 
-  await fs.writeFile(
-    listPath,
-    segmentPaths.map(file => `file '${file}'`).join("\n")
-  );
+  const listContents = clipFiles
+    .map((file) => `file '${file.replace(/'/g, "'\\''")}'`)
+    .join("\n");
 
-  const outputPath = path.join(workDir, "reelnarrator-short.mp4");
+  fs.writeFileSync(listPath, listContents);
 
-  await runFFmpeg([
+  await runCommand(ffmpegPath, [
     "-y",
     "-f", "concat",
     "-safe", "0",
     "-i", listPath,
-    "-c:v", "libx264",
-    "-preset", "ultrafast",
-    "-crf", "23",
-    "-pix_fmt", "yuv420p",
+    "-c", "copy",
     "-movflags", "+faststart",
-    "-an",
     outputPath
   ]);
 
-  return outputPath;
+  if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 1000) {
+    throw new Error("The finished video file could not be created.");
+  }
 }
 
-async function processVideo(jobId, file) {
-  const workDir = path.join(os.tmpdir(), `reelnarrator-${jobId}`);
+async function processVideo(jobId, buffer, mimeType) {
+  const directory = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "reelnarrator-")
+  );
+
+  const inputPath = path.join(directory, "original-video");
+  const outputPath = path.join(directory, "finished-short.mp4");
+
+  const job = jobs.get(jobId);
+  if (job) job.directory = directory;
 
   try {
-    await fs.mkdir(workDir, { recursive: true });
+    updateJob(jobId, {
+      stage: "saving",
+      progress: 10,
+      message: "Saving uploaded video..."
+    });
 
-    updateJob(jobId, "saving", 10, "Saving your uploaded video.");
+    await fs.promises.writeFile(inputPath, buffer);
 
-    const extension = path.extname(file.originalname) || ".mp4";
-    const inputPath = path.join(workDir, `source${extension}`);
+    updateJob(jobId, {
+      progress: 12,
+      message: "Upload saved. Starting AI analysis..."
+    });
 
-    await fs.writeFile(inputPath, file.buffer);
+    const analysis = await analyseVideo(inputPath, mimeType, jobId);
 
-    updateJob(jobId, "analysing", 20, "Starting AI video analysis.");
+    updateJob(jobId, {
+      stage: "selecting",
+      progress: 60,
+      message: "AI has selected the scenes. Preparing the edit...",
+      clips: analysis.clips
+    });
 
-    const analysis = await analyseVideo(
-      inputPath,
-      file.mimetype,
-      jobId
-    );
+    await renderShort(inputPath, analysis.clips, outputPath, jobId);
 
-    updateJob(jobId, "selecting", 50, "Selecting the best moments.");
+    updateJob(jobId, {
+      stage: "finalising",
+      progress: 95,
+      message: "Checking the finished video..."
+    });
 
-    const clips = validateClips(analysis.clips);
+    const stats = await fs.promises.stat(outputPath);
 
-    const outputPath = await renderShort(
-      inputPath,
-      clips,
-      workDir,
-      jobId
-    );
-
-    const job = jobs.get(jobId);
-
-    if (!job) throw new Error("Processing job expired.");
-
-    job.result = {
-      title: analysis.title || "Your ReelNarrator Short",
-      clips,
-      duration: clips.reduce(
-        (sum, clip) => sum + clip.end - clip.start,
-        0
-      ),
-      downloadUrl: `/api/download/${jobId}`
-    };
-
-    job.workDir = workDir;
-    job.outputPath = outputPath;
-
-    updateJob(jobId, "ready", 100, "Your Short is ready.");
-
-  } catch (error) {
-    console.error("Video processing error:", error);
-
-    const job = jobs.get(jobId);
-
-    if (job) {
-      job.stage = "failed";
-      job.message = error.message || "Video processing failed.";
-      job.updatedAt = Date.now();
+    if (stats.size === 0) {
+      throw new Error("The finished video is empty.");
     }
 
-    await fs.rm(workDir, {
-      recursive: true,
-      force: true
-    }).catch(() => {});
+    updateJob(jobId, {
+      stage: "ready",
+      progress: 100,
+      message: "Your video is ready to preview and download.",
+      result: {
+        videoUrl: `/api/download/${jobId}`,
+        downloadUrl: `/api/download/${jobId}`,
+        clips: analysis.clips,
+        size: stats.size
+      }
+    });
+
+  } catch (error) {
+    console.error(`Job ${jobId} failed:`, error);
+
+    updateJob(jobId, {
+      stage: "error",
+      progress: 0,
+      message: error.message || "Video generation failed.",
+      error: error.message || "Video generation failed."
+    });
   }
 }
 
-app.get("/api/health", (_req, res) => {
-  res.json({
-    ok: true,
-    service: "ReelNarrator",
-    editor: "background-video-processing"
-  });
-});
+app.post("/api/create-short", (req, res, next) => {
+  upload.single("movie")(req, res, async (error) => {
+    if (error) {
+      return res.status(400).json({
+        ok: false,
+        error: error.message
+      });
+    }
 
-// Start a video job.
-app.post("/api/create-short", upload.single("movie"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({
-      error: "Choose a video file first."
+    if (!ai) {
+      return res.status(500).json({
+        ok: false,
+        error: "GEMINI_API_KEY is missing from the server environment."
+      });
+    }
+
+    if (!ffmpegPath) {
+      return res.status(500).json({
+        ok: false,
+        error: "FFmpeg is not available on this server."
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        ok: false,
+        error: "Please select a video to upload."
+      });
+    }
+
+    const id = crypto.randomUUID();
+
+    const buffer = req.file.buffer;
+    const mimeType = req.file.mimetype;
+
+    jobs.set(id, {
+      id,
+      stage: "queued",
+      progress: 0,
+      message: "Video received. Preparing your job...",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      result: null,
+      error: null
     });
-  }
 
-  const id = randomUUID();
+    res.status(202).json({
+      ok: true,
+      id,
+      statusUrl: `/api/jobs/${id}`
+    });
 
-  jobs.set(id, {
-    stage: "queued",
-    progress: 0,
-    message: "Your video is in the queue.",
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  });
+    processVideo(id, buffer, mimeType).catch((err) => {
+      console.error("Unexpected processing error:", err);
 
-  processVideo(id, req.file).catch(error => {
-    console.error("Background job error:", error);
-  });
-
-  res.status(202).json({
-    ok: true,
-    id,
-    statusUrl: `/api/jobs/${id}`
+      updateJob(id, {
+        stage: "error",
+        progress: 0,
+        message: err.message || "Unexpected processing error.",
+        error: err.message || "Unexpected processing error."
+      });
+    });
   });
 });
 
-// Read live job status.
 app.get("/api/jobs/:id", (req, res) => {
   const job = jobs.get(req.params.id);
 
   if (!job) {
     return res.status(404).json({
-      error: "Processing job not found or expired."
+      error: "Job not found. It may have expired or the server may have restarted."
     });
   }
 
+  res.set("Cache-Control", "no-store");
+
   res.json({
-    id: req.params.id,
+    id: job.id,
     stage: job.stage,
     progress: job.progress,
     message: job.message,
-    result: job.result || null
+    result: job.result,
+    error: job.error
   });
 });
 
-// Download finished video.
 app.get("/api/download/:id", (req, res) => {
   const job = jobs.get(req.params.id);
 
-  if (!job || job.stage !== "ready" || !job.outputPath) {
+  if (!job || job.stage !== "ready" || !job.directory) {
     return res.status(404).json({
-      error: "Your video is not ready or is no longer available."
+      error: "The finished video is not available."
     });
   }
 
-  res.download(job.outputPath, "reelnarrator-short.mp4");
+  const outputPath = path.join(job.directory, "finished-short.mp4");
+
+  if (!fs.existsSync(outputPath)) {
+    return res.status(404).json({
+      error: "The video file could not be found."
+    });
+  }
+
+  res.download(outputPath, "reelnarrator-short.mp4");
 });
 
-// Voice generation.
 app.post("/api/voice", async (req, res) => {
-  try {
-    if (!process.env.ELEVENLABS_API_KEY) {
-      return res.status(503).json({
-        error: "ElevenLabs API key is not configured."
-      });
-    }
-
-    const text = String(req.body?.text || "").trim();
-
-    if (!text || text.length > 12000) {
-      return res.status(400).json({
-        error: "Enter narration up to 12,000 characters."
-      });
-    }
-
-    const voiceId = String(
-      req.body?.voiceId || "21m00Tcm4TlvDq8ikWAM"
-    );
-
-    const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`,
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": process.env.ELEVENLABS_API_KEY,
-          "Content-Type": "application/json",
-          "Accept": "audio/mpeg"
-        },
-        body: JSON.stringify({
-          text,
-          model_id: "eleven_multilingual_v2"
-        })
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error("Voice provider could not generate audio.");
-    }
-
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.send(Buffer.from(await response.arrayBuffer()));
-
-  } catch (error) {
-    res.status(500).json({
-      error: error.message || "Voice generation failed."
-    });
-  }
-});
-
-// Clean up expired jobs.
-setInterval(async () => {
-  const expiry = Date.now() - 60 * 60 * 1000;
-
-  for (const [id, job] of jobs) {
-    if (job.updatedAt < expiry) {
-      jobs.delete(id);
-
-      if (job.workDir) {
-        await fs.rm(job.workDir, {
-          recursive: true,
-          force: true
-        }).catch(() => {});
-      }
-    }
-  }
-}, 10 * 60 * 1000).unref();
-
-app.use((error, _req, res, _next) => {
-  if (error instanceof multer.MulterError &&
-      error.code === "LIMIT_FILE_SIZE") {
-    return res.status(413).json({
-      error: `Video is too large. Maximum size is ${maxMb} MB.`
-    });
-  }
-
-  res.status(400).json({
-    error: error.message || "Request failed."
+  res.status(501).json({
+    ok: false,
+    error: "Voice generation is not connected to the finished video yet."
   });
 });
 
-app.listen(port, () => {
-  console.log(`ReelNarrator running on port ${port}`);
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    service: "ReelNarrator",
+    editor: "AI-analysis-and-video-rendering",
+    geminiConfigured: Boolean(API_KEY),
+    ffmpegConfigured: Boolean(ffmpegPath)
+  });
+});
+
+app.use((error, req, res, next) => {
+  console.error(error);
+
+  if (res.headersSent) return next(error);
+
+  res.status(500).json({
+    ok: false,
+    error: error.message || "An unexpected server error occurred."
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`ReelNarrator running on port ${PORT}`);
 });
       
