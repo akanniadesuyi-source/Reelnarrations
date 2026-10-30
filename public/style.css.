@@ -1,83 +1,92 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
 
 :root {
   --bg: #090b12;
-  --panel: #121522;
-  --border: #252a3b;
-  --text: #f5f6ff;
-  --muted: #969db2;
-  --purple: #8b5cf6;
-  --blue: #536dfe;
+  --panel: #121621;
+  --panel-light: #191f2d;
+  --text: #f5f7ff;
+  --muted: #929bad;
+  --accent: #a78bfa;
+  --accent2: #7c5cff;
+  --border: #282f40;
+  --green: #63d6a3;
 }
 
 * {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  margin: 0;
+  min-height: 100vh;
   background:
-    radial-gradient(ellipse at 50% 0%, #25204a 0%, transparent 42%),
+    radial-gradient(ellipse at 50% 0%, #242044 0%, transparent 48%),
     var(--bg);
   color: var(--text);
   font-family: 'DM Sans', sans-serif;
-  min-height: 100vh;
+  padding: 0 18px;
+}
+
+button, input, textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
 }
 
 .topbar {
+  max-width: 1050px;
+  margin: auto;
   height: 76px;
-  padding: 0 7%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid rgba(255,255,255,.08);
-  background: rgba(9,11,18,.8);
+  border-bottom: 1px solid var(--border);
 }
 
 .brand {
   color: white;
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 21px;
-  font-weight: 700;
   text-decoration: none;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 800;
+  font-size: 21px;
   letter-spacing: -1px;
 }
 
 .brand span {
-  color: #a78bfa;
+  color: var(--accent);
 }
 
 .tag, .eyebrow {
-  color: #a78bfa;
+  color: var(--accent);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: 2px;
 }
 
 main {
-  width: min(850px, 92%);
+  max-width: 850px;
   margin: auto;
-  padding: 65px 0 35px;
 }
 
 .hero {
   text-align: center;
-  margin-bottom: 40px;
+  padding: 65px 12px 38px;
 }
 
 .hero h1 {
   font-family: 'Space Grotesk', sans-serif;
-  font-size: clamp(40px, 8vw, 66px);
-  line-height: 1.05;
+  font-size: clamp(38px, 8vw, 64px);
+  line-height: 1.08;
   letter-spacing: -3px;
-  margin: 18px 0;
+  margin: 17px 0;
 }
 
 .hero h1 span {
-  background: linear-gradient(90deg, #a78bfa, #60a5fa);
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
+  color: var(--accent);
 }
 
 .sub {
@@ -85,16 +94,16 @@ main {
   max-width: 510px;
   margin: auto;
   line-height: 1.7;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .panel {
-  background: rgba(18,21,34,.95);
+  background: rgba(18, 22, 33, .96);
   border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 28px;
-  margin-bottom: 22px;
-  box-shadow: 0 18px 55px rgba(0,0,0,.2);
+  border-radius: 18px;
+  padding: 25px;
+  margin-bottom: 20px;
+  box-shadow: 0 15px 50px rgba(0,0,0,.2);
 }
 
 .tabs {
@@ -102,168 +111,189 @@ main {
   gap: 10px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 17px;
-  margin-bottom: 25px;
+  margin-bottom: 22px;
 }
 
 .tab {
   background: transparent;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   color: var(--muted);
-  padding: 11px 17px;
   border-radius: 9px;
-  font-weight: 600;
-  cursor: pointer;
+  padding: 11px 16px;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .tab.active {
-  background: #282044;
-  border-color: #6945b8;
-  color: #d8c8ff;
+  color: white;
+  background: #292344;
+  border-color: var(--accent);
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hidden {
+  display: none !important;
 }
 
 .dropzone {
-  min-height: 190px;
-  border: 1px dashed #555078;
-  border-radius: 15px;
-  background: #17182a;
+  border: 1px dashed #64558f;
+  border-radius: 14px;
+  min-height: 175px;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 9px;
+  background: #171827;
   text-align: center;
-  cursor: pointer;
   padding: 20px;
+  cursor: pointer;
 }
 
 .dropzone:hover {
-  border-color: #a78bfa;
-  background: #1d1b35;
+  border-color: var(--accent);
+  background: #1d1b32;
 }
 
 .uploadIcon {
-  font-size: 34px;
-  color: #a78bfa;
+  width: 43px;
+  height: 43px;
+  border-radius: 12px;
+  background: #302650;
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  font-size: 27px;
 }
 
 .dropzone strong {
-  font-size: 17px;
+  font-size: 15px;
 }
 
 .dropzone span:not(.uploadIcon),
 .dropzone small,
-.hint,
-.voiceInfo span {
+.hint {
   color: var(--muted);
   font-size: 12px;
 }
 
 .primary {
   width: 100%;
-  margin-top: 20px;
-  padding: 15px;
-  border: none;
+  border: 0;
   border-radius: 10px;
-  background: linear-gradient(100deg, #7545df, #536dfe);
+  padding: 15px 18px;
+  background: linear-gradient(110deg, #9874ff, #7051e8);
   color: white;
+  font-weight: 800;
   font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
   transition: .2s;
 }
 
 .primary:hover {
-  filter: brightness(1.15);
+  filter: brightness(1.12);
   transform: translateY(-1px);
 }
 
 .primary:disabled {
-  opacity: .6;
+  opacity: .55;
   cursor: wait;
   transform: none;
 }
 
 .field {
   width: 100%;
-  margin-top: 12px;
   padding: 15px;
-  background: #0c0f19;
-  color: white;
   border: 1px solid var(--border);
   border-radius: 10px;
+  background: #0b0f18;
+  color: white;
   outline: none;
 }
 
 .field:focus, .script:focus {
-  border-color: #8b5cf6;
-}
-
-.pane label:not(.dropzone) {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.hint {
-  line-height: 1.6;
+  border-color: var(--accent);
 }
 
 .status {
-  color: #c4b5fd;
+  margin-top: 15px;
+  color: var(--green);
   font-size: 13px;
-  line-height: 1.6;
-  min-height: 20px;
+  line-height: 1.5;
 }
 
-.sectionHead, .voiceRow {
+.sectionHead {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 15px;
+  margin-bottom: 20px;
 }
 
 .sectionHead h2 {
   font-family: 'Space Grotesk', sans-serif;
-  font-size: 23px;
-  margin: 8px 0 20px;
+  font-size: 22px;
+  margin-top: 7px;
 }
 
 .secondary {
-  background: #22263a;
-  border: 1px solid #383d55;
+  background: var(--panel-light);
   color: white;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 14px;
-  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .script {
   width: 100%;
-  min-height: 250px;
+  min-height: 270px;
   resize: vertical;
-  padding: 18px;
-  border-radius: 12px;
+  background: #0b0f18;
   border: 1px solid var(--border);
-  background: #0b0e18;
+  border-radius: 12px;
   color: white;
-  font: 14px/1.8 'DM Sans', sans-serif;
+  padding: 17px;
   outline: none;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.script::placeholder {
+  color: #687184;
 }
 
 .voiceRow {
-  margin-top: 24px;
-  flex-wrap: wrap;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  margin-top: 20px;
 }
 
 .voiceInfo {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
-.small {
+.voiceInfo strong {
+  font-size: 14px;
+}
+
+.voiceInfo span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.primary.small {
   width: auto;
-  margin: 0;
-  padding: 12px 20px;
+  padding: 12px 17px;
 }
 
 .audio {
@@ -273,25 +303,29 @@ main {
 
 .download {
   display: inline-block;
-  margin-top: 15px;
-  color: #c4b5fd;
+  margin-top: 14px;
+  color: var(--accent);
+  font-size: 13px;
 }
 
 footer {
   text-align: center;
-  color: #747b91;
+  color: #71798b;
   font-size: 11px;
-  padding: 20px 0;
-}
-
-.hidden {
-  display: none !important;
+  padding: 25px 5px 35px;
 }
 
 @media (max-width: 600px) {
+  body {
+    padding: 0 12px;
+  }
+
   .topbar {
-    padding: 0 5%;
     height: 65px;
+  }
+
+  .brand {
+    font-size: 18px;
   }
 
   .tag {
@@ -299,17 +333,17 @@ footer {
     letter-spacing: 1px;
   }
 
-  main {
-    padding-top: 45px;
-  }
-
-  .panel {
-    padding: 19px;
-    border-radius: 15px;
+  .hero {
+    padding: 48px 5px 30px;
   }
 
   .hero h1 {
     letter-spacing: -2px;
+  }
+
+  .panel {
+    padding: 17px;
+    border-radius: 14px;
   }
 
   .sectionHead {
@@ -318,5 +352,14 @@ footer {
 
   .sectionHead h2 {
     font-size: 19px;
+  }
+
+  .voiceRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .primary.small {
+    width: 100%;
   }
 }
