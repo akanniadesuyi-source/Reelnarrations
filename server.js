@@ -1,3 +1,4 @@
+
 import express from "express";
 import multer from "multer";
 import dotenv from "dotenv";
@@ -16,9 +17,10 @@ const app = express();
 const port = process.env.PORT || 3000;
 const maxMb = Number(process.env.MAX_UPLOAD_MB || 100);
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const publicPath = path.join(__dirname, "public");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+app.use(express.json({ limit: "1mb" }));
+app.use(express.static(path.join(__dirname, "public")));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -29,25 +31,30 @@ const upload = multer({
   }
 });
 
-app.use(express.json({ limit: "1mb" }));
-app.use(express.static(publicPath));
-
-const completedJobs = new Map();
+const jobs = new Map();
 
 function getAI() {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is not configured.");
   }
 
-  return new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY
-  });
+  return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+}
+
+function updateJob(id, stage, progress, message) {
+  const job = jobs.get(id);
+  if (!job) return;
+
+  job.stage = stage;
+  job.progress = progress;
+  job.message = message;
+  job.updatedAt = Date.now();
 }
 
 function runFFmpeg(args) {
   return new Promise((resolve, reject) => {
     if (!ffmpegPath) {
-      return reject(new Error("FFmpeg binary is unavailable."));
+      return reject(new Error("FFmpeg is unavailable."));
     }
 
     const child = spawn(ffmpegPath, args);
@@ -55,9 +62,8 @@ function runFFmpeg(args) {
 
     child.stderr.on("data", chunk => {
       errorText += chunk.toString();
-
-      if (errorText.length > 12000) {
-        errorText = errorText.slice(-12000);
+      if (errorText.length > 10000) {
+        errorText = errorText.slice(-10000);
       }
     });
 
@@ -66,7 +72,7 @@ function runFFmpeg(args) {
     child.on("close", code => {
       if (code === 0) resolve();
       else reject(new Error(
-        `Video processing failed: ${errorText.slice(-1800)}`
+        `Video rendering failed: ${errorText.slice(-1200)}`
       ));
     });
   });
@@ -82,24 +88,49 @@ function parseAIJson(text) {
   const last = cleaned.lastIndexOf("}");
 
   if (first < 0 || last < first) {
-    throw new Error("AI did not return valid clip selections.");
+    throw new Error("AI returned an invalid clip selection.");
   }
 
   return JSON.parse(cleaned.slice(first, last + 1));
 }
 
-async function analyseVideo(videoPath, mimeType) {
+async function analyseVideo(videoPath, mimeType, jobId) {
+  updateJob(jobId, "analysing", 25, "AI is analysing your video.");
+
   const ai = getAI();
 
-  const videoBuffer = await fs.readFile(videoPath);
-  const videoBlob = new Blob([videoBuffer], {
-    type: mimeType
-  });
-
   const uploaded = await ai.files.upload({
-    file: videoBlob,
+    file: videoPath,
     config: { mimeType }
   });
+
+  if (!uploaded.name || !uploaded.uri) {
+    throw new Error("Gemini could not upload the video for analysis.");
+  }
+
+  let file = uploaded;
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if (file.state === "ACTIVE") break;
+
+    if (file.state === "FAILED") {
+      throw new Error("Gemini could not process this video.");
+    }
+
+    updateJob(
+      jobId,
+      "analysing",
+      30,
+      "Preparing video for AI analysis."
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    file = await ai.files.get({ name: uploaded.name });
+  }
+
+  if (file.state !== "ACTIVE") {
+    throw new Error("Video analysis preparation timed out.");
+  }
 
   const result = await ai.models.generateContent({
     model: "gemini-2.5-flash",
@@ -112,33 +143,29 @@ async function analyseVideo(videoPath, mimeType) {
       },
       {
         text: `
-Analyse this video to prepare one engaging YouTube Short.
+Find 2 to 6 interesting moments in this video for one coherent YouTube Short.
 
-Only select moments that are actually present in the video.
-Choose 2 to 6 strong moments that form a coherent sequence.
-Keep the moments in their original chronological order.
-Avoid unrelated scenes and repeated moments.
-Aim for a combined duration of 20 to 55 seconds.
+Keep the moments in chronological order.
+Choose moments that connect into a clear mini-story.
+Each moment must be 3 to 15 seconds.
+Total selected duration must be between 20 and 55 seconds.
+Use only moments actually present in the video.
 
-Return ONLY valid JSON in this format:
+Return only JSON:
 {
-  "title": "Short suggested title",
+  "title": "Suggested Short title",
   "clips": [
     {
-      "start": 12.5,
-      "end": 20.0,
+      "start": 10,
+      "end": 18,
       "reason": "Why this moment is interesting"
     }
   ]
 }
 
-Rules:
-- start and end must be seconds from the beginning of the video.
-- end must be greater than start.
-- Each clip must be between 3 and 15 seconds.
-- Do not invent timestamps or events.
-- Do not include dialogue or copyrighted screenplay text.
-- If you cannot identify suitable moments, return {"title":"","clips":[]}.
+Timestamps must be seconds from the start of the video.
+If suitable moments cannot be identified, return:
+{"title":"","clips":[]}
 `
       }
     ]
@@ -149,7 +176,7 @@ Rules:
 
 function validateClips(clips) {
   if (!Array.isArray(clips)) {
-    throw new Error("AI returned no usable clip list.");
+    throw new Error("No clip selections were returned.");
   }
 
   const selected = clips
@@ -169,29 +196,33 @@ function validateClips(clips) {
     }))
     .sort((a, b) => a.start - b.start);
 
-  if (selected.length < 2) {
-    throw new Error(
-      "The AI could not find at least two suitable moments. Try another video."
-    );
-  }
-
   const total = selected.reduce(
     (sum, clip) => sum + clip.end - clip.start,
     0
   );
 
-  if (total > 60) {
-    throw new Error("Selected clips exceed the 60-second limit.");
+  if (selected.length < 2 || total < 20 || total > 60) {
+    throw new Error(
+      "AI could not find enough suitable moments. Try another video."
+    );
   }
 
   return selected;
 }
 
-async function renderShort(inputPath, clips, workDir) {
+async function renderShort(inputPath, clips, workDir, jobId) {
   const segmentPaths = [];
 
   for (let i = 0; i < clips.length; i++) {
     const clip = clips[i];
+
+    updateJob(
+      jobId,
+      "rendering",
+      55 + Math.round((i / clips.length) * 30),
+      `Rendering selected moment ${i + 1} of ${clips.length}.`
+    );
+
     const segmentPath = path.join(workDir, `clip-${i}.mp4`);
 
     await runFFmpeg([
@@ -214,13 +245,14 @@ async function renderShort(inputPath, clips, workDir) {
     segmentPaths.push(segmentPath);
   }
 
+  updateJob(jobId, "rendering", 90, "Joining the selected moments.");
+
   const listPath = path.join(workDir, "clips.txt");
 
-  const listContent = segmentPaths
-    .map(file => `file '${file.replace(/'/g, "'\\''")}'`)
-    .join("\n");
-
-  await fs.writeFile(listPath, listContent);
+  await fs.writeFile(
+    listPath,
+    segmentPaths.map(file => `file '${file}'`).join("\n")
+  );
 
   const outputPath = path.join(workDir, "reelnarrator-short.mp4");
 
@@ -241,102 +273,145 @@ async function renderShort(inputPath, clips, workDir) {
   return outputPath;
 }
 
+async function processVideo(jobId, file) {
+  const workDir = path.join(os.tmpdir(), `reelnarrator-${jobId}`);
+
+  try {
+    await fs.mkdir(workDir, { recursive: true });
+
+    updateJob(jobId, "saving", 10, "Saving your uploaded video.");
+
+    const extension = path.extname(file.originalname) || ".mp4";
+    const inputPath = path.join(workDir, `source${extension}`);
+
+    await fs.writeFile(inputPath, file.buffer);
+
+    updateJob(jobId, "analysing", 20, "Starting AI video analysis.");
+
+    const analysis = await analyseVideo(
+      inputPath,
+      file.mimetype,
+      jobId
+    );
+
+    updateJob(jobId, "selecting", 50, "Selecting the best moments.");
+
+    const clips = validateClips(analysis.clips);
+
+    const outputPath = await renderShort(
+      inputPath,
+      clips,
+      workDir,
+      jobId
+    );
+
+    const job = jobs.get(jobId);
+
+    if (!job) throw new Error("Processing job expired.");
+
+    job.result = {
+      title: analysis.title || "Your ReelNarrator Short",
+      clips,
+      duration: clips.reduce(
+        (sum, clip) => sum + clip.end - clip.start,
+        0
+      ),
+      downloadUrl: `/api/download/${jobId}`
+    };
+
+    job.workDir = workDir;
+    job.outputPath = outputPath;
+
+    updateJob(jobId, "ready", 100, "Your Short is ready.");
+
+  } catch (error) {
+    console.error("Video processing error:", error);
+
+    const job = jobs.get(jobId);
+
+    if (job) {
+      job.stage = "failed";
+      job.message = error.message || "Video processing failed.";
+      job.updatedAt = Date.now();
+    }
+
+    await fs.rm(workDir, {
+      recursive: true,
+      force: true
+    }).catch(() => {});
+  }
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     service: "ReelNarrator",
-    editor: "highlight-selection-and-rendering"
+    editor: "background-video-processing"
   });
 });
 
-// Analyse and render an uploaded video.
-app.post(
-  "/api/create-short",
-  upload.single("movie"),
-  async (req, res) => {
-    const workDir = path.join(os.tmpdir(), `reelnarrator-${randomUUID()}`);
-
-    try {
-      if (!req.file) {
-        return res.status(400).json({
-          error: "Choose a video file first."
-        });
-      }
-
-      await fs.mkdir(workDir, { recursive: true });
-
-      const extension = path.extname(req.file.originalname) || ".mp4";
-      const inputPath = path.join(workDir, `source${extension}`);
-
-      await fs.writeFile(inputPath, req.file.buffer);
-
-      res.setHeader("X-Content-Type-Options", "nosniff");
-
-      const analysis = await analyseVideo(
-        inputPath,
-        req.file.mimetype
-      );
-
-      const clips = validateClips(analysis.clips);
-
-      const outputPath = await renderShort(
-        inputPath,
-        clips,
-        workDir
-      );
-
-      const id = randomUUID();
-
-      completedJobs.set(id, {
-        path: outputPath,
-        workDir,
-        createdAt: Date.now()
-      });
-
-      res.json({
-        ok: true,
-        id,
-        title: analysis.title || "Your ReelNarrator Short",
-        clips,
-        duration: clips.reduce(
-          (sum, clip) => sum + clip.end - clip.start,
-          0
-        ),
-        downloadUrl: `/api/download/${id}`
-      });
-
-    } catch (err) {
-      console.error("Create Short error:", err);
-
-      await fs.rm(workDir, {
-        recursive: true,
-        force: true
-      }).catch(() => {});
-
-      res.status(500).json({
-        error: err.message || "Could not create your Short."
-      });
-    }
-  }
-);
-
-// Download the finished MP4.
-app.get("/api/download/:id", async (req, res) => {
-  const job = completedJobs.get(req.params.id);
-
-  if (!job) {
-    return res.status(404).json({
-      error: "This video is no longer available. Create it again."
+// Start a video job.
+app.post("/api/create-short", upload.single("movie"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      error: "Choose a video file first."
     });
   }
 
-  res.download(
-    job.path,
-    "reelnarrator-short.mp4"
-  );
+  const id = randomUUID();
+
+  jobs.set(id, {
+    stage: "queued",
+    progress: 0,
+    message: "Your video is in the queue.",
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  });
+
+  processVideo(id, req.file).catch(error => {
+    console.error("Background job error:", error);
+  });
+
+  res.status(202).json({
+    ok: true,
+    id,
+    statusUrl: `/api/jobs/${id}`
+  });
 });
 
-// Generate voice with ElevenLabs.
+// Read live job status.
+app.get("/api/jobs/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+
+  if (!job) {
+    return res.status(404).json({
+      error: "Processing job not found or expired."
+    });
+  }
+
+  res.json({
+    id: req.params.id,
+    stage: job.stage,
+    progress: job.progress,
+    message: job.message,
+    result: job.result || null
+  });
+});
+
+// Download finished video.
+app.get("/api/download/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+
+  if (!job || job.stage !== "ready" || !job.outputPath) {
+    return res.status(404).json({
+      error: "Your video is not ready or is no longer available."
+    });
+  }
+
+  res.download(job.outputPath, "reelnarrator-short.mp4");
+});
+
+// Voice generation.
 app.post("/api/voice", async (req, res) => {
   try {
     if (!process.env.ELEVENLABS_API_KEY) {
@@ -346,21 +421,16 @@ app.post("/api/voice", async (req, res) => {
     }
 
     const text = String(req.body?.text || "").trim();
+
+    if (!text || text.length > 12000) {
+      return res.status(400).json({
+        error: "Enter narration up to 12,000 characters."
+      });
+    }
+
     const voiceId = String(
       req.body?.voiceId || "21m00Tcm4TlvDq8ikWAM"
     );
-
-    if (!text) {
-      return res.status(400).json({
-        error: "Write a narration first."
-      });
-    }
-
-    if (text.length > 12000) {
-      return res.status(400).json({
-        error: "Maximum narration length is 12,000 characters."
-      });
-    }
 
     const response = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`,
@@ -379,57 +449,51 @@ app.post("/api/voice", async (req, res) => {
     );
 
     if (!response.ok) {
-      const detail = await response.text();
-      return res.status(response.status).json({
-        error: `ElevenLabs error: ${detail.slice(0, 400)}`
-      });
+      throw new Error("Voice provider could not generate audio.");
     }
 
-    const audio = Buffer.from(await response.arrayBuffer());
-
     res.setHeader("Content-Type", "audio/mpeg");
-    res.send(audio);
+    res.send(Buffer.from(await response.arrayBuffer()));
 
-  } catch (err) {
-    console.error("Voice error:", err);
-
+  } catch (error) {
     res.status(500).json({
-      error: err.message || "Could not generate voice."
+      error: error.message || "Voice generation failed."
     });
   }
 });
 
-// Remove expired temporary files.
+// Clean up expired jobs.
 setInterval(async () => {
   const expiry = Date.now() - 60 * 60 * 1000;
 
-  for (const [id, job] of completedJobs) {
-    if (job.createdAt < expiry) {
-      completedJobs.delete(id);
-      await fs.rm(job.workDir, {
-        recursive: true,
-        force: true
-      }).catch(() => {});
+  for (const [id, job] of jobs) {
+    if (job.updatedAt < expiry) {
+      jobs.delete(id);
+
+      if (job.workDir) {
+        await fs.rm(job.workDir, {
+          recursive: true,
+          force: true
+        }).catch(() => {});
+      }
     }
   }
 }, 10 * 60 * 1000).unref();
 
-app.use((err, _req, res, _next) => {
-  if (
-    err instanceof multer.MulterError &&
-    err.code === "LIMIT_FILE_SIZE"
-  ) {
+app.use((error, _req, res, _next) => {
+  if (error instanceof multer.MulterError &&
+      error.code === "LIMIT_FILE_SIZE") {
     return res.status(413).json({
       error: `Video is too large. Maximum size is ${maxMb} MB.`
     });
   }
 
   res.status(400).json({
-    error: err.message || "Request failed."
+    error: error.message || "Request failed."
   });
 });
 
 app.listen(port, () => {
   console.log(`ReelNarrator running on port ${port}`);
 });
-        
+      
