@@ -1,145 +1,238 @@
 const $ = (id) => document.getElementById(id);
 
 let activeTab = "upload";
+let currentVideoUrl = null;
 
-document.querySelectorAll(".tab").forEach(btn => {
-  btn.addEventListener("click", () => {
-    activeTab = btn.dataset.tab;
-    document.querySelectorAll(".tab").forEach(b =>
-      b.classList.toggle("active", b === btn)
-    );
-    $("uploadPane").classList.toggle("hidden", activeTab !== "upload");
-    $("youtubePane").classList.toggle("hidden", activeTab !== "youtube");
-    $("status").textContent = "";
-  });
-});
-
-$("movieFile").addEventListener("change", () => {
-  $("fileName").textContent =
-    $("movieFile").files[0]?.name || "No file selected";
-});
+function setStatus(message, error = false) {
+  $("status").textContent = message;
+  $("status").style.color = error ? "#ff8585" : "#63d6a3";
+}
 
 function busy(button, on, label) {
   button.disabled = on;
-  button.textContent = on ? "Working..." : label;
+  button.textContent = on ? "Creating your Short..." : label;
 }
 
-async function showError(response) {
-  const data = await response.json().catch(() => ({}));
-  throw new Error(data.error || "Something went wrong.");
-}
+// Switch between upload and YouTube tabs.
+document.querySelectorAll(".tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    activeTab = btn.dataset.tab;
 
-async function makeNarration(url, file) {
-  const button = file ? $("uploadBtn") : $("youtubeBtn");
-  const original = file
-    ? "Analyse movie & create script"
-    : "Analyse link & create script";
+    document.querySelectorAll(".tab").forEach(tab =>
+      tab.classList.toggle("active", tab === btn)
+    );
 
-  busy(button, true, original);
-  $("status").textContent = "Analysing the video. This can take a while...";
+    $("uploadPane").classList.toggle("hidden", activeTab !== "upload");
+    $("youtubePane").classList.toggle("hidden", activeTab !== "youtube");
 
-  try {
-    let response;
+    setStatus("");
+  });
+});
 
-    if (file) {
-      const form = new FormData();
-      form.append("movie", file);
-      response = await fetch("/api/narrate-upload", {
-        method: "POST",
-        body: form
-      });
-    } else {
-      response = await fetch("/api/narrate-youtube", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({url})
-      });
+// Display selected filename.
+$("movieFile").addEventListener("change", () => {
+  const file = $("movieFile").files[0];
+
+  $("fileName").textContent = file
+    ? `${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`
+    : "No file selected";
+});
+
+// Create preview area.
+const preview = document.createElement("section");
+preview.id = "shortPreview";
+preview.className = "panel hidden";
+preview.innerHTML = `
+  <div class="sectionHead">
+    <div>
+      <p class="eyebrow">YOUR FINISHED VIDEO</p>
+      <h2 id="shortTitle">Your YouTube Short</h2>
+    </div>
+  </div>
+  <video id="shortVideo" controls playsinline
+    style="width:100%;max-height:600px;background:#000;border-radius:12px">
+  </video>
+  <div id="clipDetails" style="margin-top:18px"></div>
+  <a id="shortDownload" class="primary"
+    style="display:block;text-align:center;text-decoration:none;margin-top:18px"
+    download="reelnarrator-short.mp4">
+    Download finished Short
+  </a>
+`;
+
+$("status").parentNode.insertBefore(
+  preview,
+  $("status").parentNode.nextSibling
+);
+
+// Create a Short using the new backend.
+function createShort(file) {
+  if (!file) {
+    setStatus("Choose a video first.", true);
+    return;
+  }
+
+  if (!file.type.startsWith("video/")) {
+    setStatus("Please select a video file.", true);
+    return;
+  }
+
+  const button = $("uploadBtn");
+  const originalLabel = "Analyse movie & create script";
+
+  busy(button, true, originalLabel);
+  preview.classList.add("hidden");
+
+  if (currentVideoUrl) {
+    URL.revokeObjectURL(currentVideoUrl);
+    currentVideoUrl = null;
+  }
+
+  setStatus("Uploading your video...");
+
+  const form = new FormData();
+  form.append("movie", file);
+
+  const request = new XMLHttpRequest();
+
+  request.open("POST", "/api/create-short");
+
+  request.upload.onprogress = event => {
+    if (event.lengthComputable) {
+      const percent = Math.round(
+        event.loaded / event.total * 100
+      );
+      setStatus(`Uploading video: ${percent}%`);
+    }
+  };
+
+  request.onload = () => {
+    busy(button, false, originalLabel);
+
+    let data;
+
+    try {
+      data = JSON.parse(request.responseText);
+    } catch {
+      setStatus("The server returned an unreadable response.", true);
+      return;
     }
 
-    if (!response.ok) await showError(response);
+    if (request.status < 200 || request.status >= 300) {
+      setStatus(data.error || "Could not create your Short.", true);
+      return;
+    }
 
-    const data = await response.json();
-    $("script").value = data.script || "";
-    $("status").textContent =
-      "Your narration script is ready. Review it before generating the voice.";
-  } catch (err) {
-    $("status").textContent = err.message;
-  } finally {
-    busy(button, false, original);
-  }
+    $("shortTitle").textContent =
+      data.title || "Your YouTube Short";
+
+    $("shortVideo").src = data.downloadUrl;
+    $("shortDownload").href = data.downloadUrl;
+
+    $("clipDetails").innerHTML = "";
+
+    const heading = document.createElement("h3");
+    heading.textContent = "Selected moments";
+    heading.style.marginBottom = "12px";
+    $("clipDetails").appendChild(heading);
+
+    (data.clips || []).forEach((clip, index) => {
+      const item = document.createElement("p");
+      item.style.padding = "10px 0";
+      item.style.borderBottom = "1px solid #282f40";
+
+      const start = Number(clip.start).toFixed(1);
+      const end = Number(clip.end).toFixed(1);
+
+      item.textContent =
+        `${index + 1}. ${start}s – ${end}s: ${clip.reason}`;
+
+      $("clipDetails").appendChild(item);
+    });
+
+    preview.classList.remove("hidden");
+    setStatus("Your Short is ready! Preview it below.");
+    preview.scrollIntoView({ behavior: "smooth" });
+  };
+
+  request.onerror = () => {
+    busy(button, false, originalLabel);
+    setStatus("Connection failed. Please try again.", true);
+  };
+
+  request.onabort = () => {
+    busy(button, false, originalLabel);
+    setStatus("Upload was cancelled.", true);
+  };
+
+  request.onloadstart = () => {
+    setStatus("Uploading and preparing your video...");
+  };
+
+  request.send(form);
 }
 
 $("uploadBtn").addEventListener("click", () => {
-  const file = $("movieFile").files[0];
-
-  if (!file) {
-    $("status").textContent = "Choose a video file first.";
-    return;
-  }
-
-  makeNarration("", file);
+  createShort($("movieFile").files[0]);
 });
 
-$("youtubeBtn").addEventListener("click", () => {
-  const url = $("youtubeUrl").value.trim();
-
-  if (!url) {
-    $("status").textContent = "Paste a YouTube link first.";
-    return;
-  }
-
-  makeNarration(url, null);
-});
-
+// Copy script.
 $("copyBtn").addEventListener("click", async () => {
-  if (!$("script").value.trim()) {
-    $("status").textContent = "There is no script to copy yet.";
+  const script = $("script").value.trim();
+
+  if (!script) {
+    setStatus("There is no script to copy yet.", true);
     return;
   }
 
   try {
-    await navigator.clipboard.writeText($("script").value);
-    $("status").textContent = "Script copied.";
+    await navigator.clipboard.writeText(script);
+    setStatus("Script copied.");
   } catch {
-    $("status").textContent = "Select the script and copy it manually.";
+    setStatus("Select the script and copy it manually.");
   }
 });
 
+// Keep voice generation available.
 $("voiceBtn").addEventListener("click", async () => {
   const text = $("script").value.trim();
 
   if (!text) {
-    $("status").textContent = "Generate or paste a script first.";
+    setStatus("Write a narration first.", true);
     return;
   }
 
-  const btn = $("voiceBtn");
-  busy(btn, true, "Generate voice");
-  $("status").textContent = "Generating voice...";
-  $("audio").classList.add("hidden");
-  $("downloadAudio").classList.add("hidden");
+  const button = $("voiceBtn");
+  busy(button, true, "Generate voice");
 
   try {
+    setStatus("Generating voice...");
+
     const response = await fetch("/api/voice", {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({text})
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
     });
 
-    if (!response.ok) await showError(response);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || "Voice generation failed.");
+    }
 
     const blob = await response.blob();
     const audioUrl = URL.createObjectURL(blob);
 
     $("audio").src = audioUrl;
     $("audio").classList.remove("hidden");
+
     $("downloadAudio").href = audioUrl;
     $("downloadAudio").classList.remove("hidden");
 
-    $("status").textContent = "Voice generated. Listen or download it.";
-  } catch (err) {
-    $("status").textContent = err.message;
+    setStatus("Voice generated successfully.");
+  } catch (error) {
+    setStatus(error.message, true);
   } finally {
-    busy(btn, false, "Generate voice");
+    busy(button, false, "Generate voice");
   }
 });
+      
