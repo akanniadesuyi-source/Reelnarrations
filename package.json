@@ -1,14 +1,21 @@
+
 {
   "name": "reelnarrator",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "scripts": {"start": "node server.js", "dev": "node --watch server.js"},
-  "engines": {"node": ">=20"},
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@google/genai": "^1.11.0",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "ffmpeg-static": "^5.2.0"
   }
 }
