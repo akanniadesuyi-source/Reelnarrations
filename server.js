@@ -15,6 +15,7 @@ const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 100);
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 const API_KEY = process.env.GEMINI_API_KEY;
+const MODEL = "gemini-3.8-flash";
 
 const ai = API_KEY ? new GoogleGenAI({ apiKey: API_KEY }) : null;
 
@@ -43,7 +44,7 @@ function updateJob(id, values) {
   });
 }
 
-function runCommand(command, args, onProgress) {
+function runCommand(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: ["ignore", "ignore", "pipe"]
@@ -52,10 +53,7 @@ function runCommand(command, args, onProgress) {
     let errorOutput = "";
 
     child.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      errorOutput += text;
-
-      if (onProgress) onProgress(text);
+      errorOutput += chunk.toString();
     });
 
     child.on("error", reject);
@@ -205,7 +203,7 @@ Rules:
 - Each scene should be between 3 and 15 seconds.
 - Aim for a total duration between 20 and 55 seconds.
 - Timestamps must refer to the original video.
-- The clips must not extend beyond the supplied video.
+- Clips must not extend beyond the supplied video.
 
 Return ONLY valid JSON in this exact structure:
 
@@ -226,7 +224,7 @@ Return ONLY valid JSON in this exact structure:
   });
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: MODEL,
     contents: [
       {
         role: "user",
@@ -246,7 +244,7 @@ Return ONLY valid JSON in this exact structure:
   const result = parseAIResponse(response);
   const clips = validateClips(result.clips);
 
-  return { clips, uploadedFileName: uploaded.name };
+  return { clips };
 }
 
 async function renderShort(inputPath, clips, outputPath, jobId) {
@@ -262,7 +260,6 @@ async function renderShort(inputPath, clips, outputPath, jobId) {
   for (let i = 0; i < clips.length; i++) {
     const clip = clips[i];
     const clipPath = path.join(directory, `clip-${i}.mp4`);
-
     const duration = clip.end - clip.start;
 
     updateJob(jobId, {
@@ -388,8 +385,8 @@ async function processVideo(jobId, buffer, mimeType) {
   }
 }
 
-app.post("/api/create-short", (req, res, next) => {
-  upload.single("movie")(req, res, async (error) => {
+app.post("/api/create-short", (req, res) => {
+  upload.single("movie")(req, res, (error) => {
     if (error) {
       return res.status(400).json({
         ok: false,
@@ -419,7 +416,6 @@ app.post("/api/create-short", (req, res, next) => {
     }
 
     const id = crypto.randomUUID();
-
     const buffer = req.file.buffer;
     const mimeType = req.file.mimetype;
 
@@ -525,4 +521,4 @@ app.use((error, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`ReelNarrator running on port ${PORT}`);
 });
-      
+                     
