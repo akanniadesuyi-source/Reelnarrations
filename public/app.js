@@ -1,302 +1,405 @@
-const $ = id => document.getElementById(id);
 
-let currentAudioUrl = null;
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+const CONFIG = {
+  maxFileSize: 100 * 1024 * 1024,
+  uploadTimeout: 5 * 60 * 1000,
+  pollInterval: 2500
+};
+
 let currentJob = null;
-let polling = false;
+let activeRequest = null;
+let pollToken = 0;
 
-function setStatus(message, error = false) {
-  $("status").textContent = message;
-  $("status").style.color = error ? "#ff7777" : "#63d6a3";
+const uploadBtn = $("uploadBtn");
+const fileInput = $("movieFile");
+const fileName = $("fileName");
+
+function setStatus(message) {
+  const status = $("status");
+  if (status) status.textContent = message;
+}
+
+function setButton(disabled, label) {
+  if (!uploadBtn) return;
+  uploadBtn.disabled = disabled;
+  uploadBtn.textContent = label;
 }
 
 function showProgress() {
-  let panel = $("processingPanel");
-
-  if (!panel) {
-    panel = document.createElement("section");
-    panel.id = "processingPanel";
-    panel.className = "panel";
-    panel.innerHTML = `
-      <p class="eyebrow">VIDEO PROCESSING</p>
-      <h2 id="processingTitle">Preparing your video</h2>
-      <p id="processingMessage">Please wait...</p>
-      <div style="height:10px;background:#29283b;border-radius:20px;overflow:hidden;margin:18px 0">
-        <div id="progressBar" style="height:100%;width:0%;background:#a78bfa;transition:width .4s"></div>
-      </div>
-      <strong id="progressNumber">0%</strong>
-      <div id="processingSteps" style="margin-top:18px;line-height:2"></div>
-    `;
-
-    $("status").parentNode.insertBefore(
-      panel,
-      $("status").parentNode.nextSibling
-    );
-  }
-
-  panel.classList.remove("hidden");
-  return panel;
+  const panel = $("processingPanel");
+  if (panel) panel.hidden = false;
 }
 
 function updateProgress(job) {
+  showProgress();
+
+  const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
+
+  if ($("processingTitle")) {
+    $("processingTitle").textContent =
+      job.stage === "ready" ? "Your video is ready" : "Creating your Short";
+  }
+
+  if ($("processingMessage")) {
+    $("processingMessage").textContent =
+      job.message || "Please wait while your video is processed.";
+  }
+
+  if ($("progressBar")) {
+    $("progressBar").style.width = `${progress}%`;
+  }
+
+  if ($("progressNumber")) {
+    $("progressNumber").textContent = `${progress}%`;
+  }
+
   const stages = [
-    ["queued", "Waiting to start"],
-    ["saving", "Saving video"],
-    ["analysing", "AI analysing video"],
-    ["selecting", "Selecting highlights"],
-    ["rendering", "Creating vertical Short"],
-    ["ready", "Finished"]
+    "queued",
+    "saving",
+    "analysing",
+    "selecting",
+    "rendering",
+    "ready"
   ];
 
-  $("processingTitle").textContent =
-    job.stage === "failed" ? "Processing failed" :
-    job.stage === "ready" ? "Your Short is ready!" :
-    "Creating your Short";
+  const currentIndex = stages.indexOf(job.stage);
 
-  $("processingMessage").textContent = job.message || "Working...";
+  document.querySelectorAll("#processingSteps [data-stage]").forEach((item) => {
+    const index = stages.indexOf(item.dataset.stage);
 
-  $("progressBar").style.width = `${job.progress || 0}%`;
-  $("progressNumber").textContent = `${job.progress || 0}%`;
+    item.classList.toggle(
+      "completed",
+      index !== -1 && index < currentIndex
+    );
 
-  $("processingSteps").innerHTML = stages.map(([stage, label]) => {
-    const complete = stages.findIndex(item => item[0] === stage) <
-      stages.findIndex(item => item[0] === job.stage);
-
-    const active = stage === job.stage;
-    const symbol = complete ? "✓" : active ? "●" : "○";
-
-    return `<div style="color:${complete ? "#63d6a3" : active ? "#c4b5fd" : "#888"}">${symbol} ${label}</div>`;
-  }).join("");
+    item.classList.toggle(
+      "current",
+      item.dataset.stage === job.stage
+    );
+  });
 }
 
-async function checkJob(jobId) {
-  if (polling) return;
-  polling = true;
+function selectSource(source) {
+  document.querySelectorAll(".tab[data-source]").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.source === source);
+  });
 
-  try {
-    while (currentJob === jobId) {
-      const response = await fetch(`/api/jobs/${jobId}`);
-      const job = await response.json();
+  if ($("uploadPane")) {
+    $("uploadPane").hidden = source !== "upload";
+  }
+
+  if ($("youtubePane")) {
+    $("youtubePane").hidden = source !== "youtube";
+  }
+
+  if (source === "youtube") {
+    setStatus(
+      "YouTube link processing is not connected yet. Upload an authorised video file for now."
+    );
+  } else {
+    setStatus("Choose a video to get started.");
+  }
+}
+
+document.querySelectorAll(".tab[data-source]").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    selectSource(tab.dataset.source);
+  });
+});
+
+if (fileInput) {
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+
+    if (fileName) {
+      fileName.textContent = file ? file.name : "No video selected";
+    }
+
+    if (file) {
+      setStatus(
+        `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`
+      );
+    }
+  });
+}
+
+function uploadVideo(file) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("movie", file);
+
+    const xhr = new XMLHttpRequest();
+    activeRequest = xhr;
+
+    xhr.open("POST", "/api/create-short", true);
+    xhr.timeout = CONFIG.uploadTimeout;
+
+    xhr.upload.onloadstart = () => {
+      setStatus("Upload started. Sending your video to the server...");
+    };
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        const percent = Math.round(
+          (event.loaded / event.total) * 100
+        );
+
+        updateProgress({
+          stage: "saving",
+          progress: Math.min(10, Math.round(percent / 10)),
+          message: `Uploading video: ${percent}%`
+        });
+
+        setStatus(`Uploading video: ${percent}%`);
+      } else {
+        setStatus("Uploading video... waiting for upload progress.");
+      }
+    };
+
+    xhr.upload.onload = () => {
+      setStatus("Upload sent. Waiting for server confirmation...");
+    };
+
+    xhr.onload = () => {
+      activeRequest = null;
+
+      let data;
+
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        reject(
+          new Error(
+            `Server returned an invalid response (HTTP ${xhr.status}).`
+          )
+        );
+        return;
+      }
+
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(
+          new Error(
+            data.error || `Server upload failed (HTTP ${xhr.status}).`
+          )
+        );
+        return;
+      }
+
+      if (!data.ok || !data.id) {
+        reject(
+          new Error(data.error || "The server did not create a processing job.")
+        );
+        return;
+      }
+
+      resolve(data);
+    };
+
+    xhr.onerror = () => {
+      activeRequest = null;
+      reject(new Error("Network error. Check your connection and try again."));
+    };
+
+    xhr.ontimeout = () => {
+      activeRequest = null;
+      reject(
+        new Error("Upload timed out. Try a smaller video or a stronger connection.")
+      );
+    };
+
+    xhr.onabort = () => {
+      activeRequest = null;
+      reject(new Error("Upload was cancelled."));
+    };
+
+    xhr.send(formData);
+  });
+}
+
+async function checkJob(jobId, token) {
+  while (currentJob === jobId && token === pollToken) {
+    try {
+      const response = await fetch(
+        `/api/jobs/${encodeURIComponent(jobId)}`,
+        { cache: "no-store" }
+      );
+
+      let job;
+
+      try {
+        job = await response.json();
+      } catch {
+        throw new Error("The server returned an invalid job status.");
+      }
 
       if (!response.ok) {
-        throw new Error(job.error || "Could not check processing status.");
+        throw new Error(
+          job.error || `Could not check job status (HTTP ${response.status}).`
+        );
       }
 
       updateProgress(job);
 
-      if (job.stage === "failed") {
-        setStatus(job.message || "Video processing failed.", true);
-        return;
-      }
-
-      if (job.stage === "ready") {
+      if (job.stage === "ready" && job.result) {
         showResult(job.result);
         setStatus("Your video is ready.");
         return;
       }
 
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      if (job.stage === "error" || job.error) {
+        throw new Error(job.message || job.error || "Video processing failed.");
+      }
+    } catch (error) {
+      if (token !== pollToken) return;
+      throw error;
     }
-  } catch (error) {
-    setStatus(error.message, true);
-  } finally {
-    polling = false;
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, CONFIG.pollInterval);
+    });
   }
 }
 
 function showResult(result) {
-  let panel = $("shortPreview");
+  const panel = $("shortPreview");
+  if (!panel) return;
 
-  if (!panel) {
-    panel = document.createElement("section");
-    panel.id = "shortPreview";
-    panel.className = "panel";
+  panel.hidden = false;
 
-    $("processingPanel").parentNode.insertBefore(
-      panel,
-      $("processingPanel").nextSibling
-    );
+  const video = $("shortVideo");
+  const download = $("shortDownload");
+
+  if (video && result.videoUrl) {
+    video.src = result.videoUrl;
+    video.load();
   }
 
-  panel.innerHTML = `
-    <p class="eyebrow">YOUR FINISHED VIDEO</p>
-    <h2 id="shortTitle"></h2>
-    <video id="shortVideo" controls playsinline
-      style="width:100%;max-height:600px;background:#000;border-radius:12px;margin-top:14px">
-    </video>
-    <h3 style="margin-top:20px">Selected moments</h3>
-    <div id="clipDetails"></div>
-    <a id="shortDownload" class="primary"
-      style="display:block;text-align:center;text-decoration:none;margin-top:18px"
-      download="reelnarrator-short.mp4">
-      Download finished Short
-    </a>
-  `;
+  if (download && result.downloadUrl) {
+    download.href = result.downloadUrl;
+    download.hidden = false;
+  }
 
-  $("shortTitle").textContent = result.title || "Your Short";
-  $("shortVideo").src = result.downloadUrl;
-  $("shortDownload").href = result.downloadUrl;
+  if ($("shortTitle")) {
+    $("shortTitle").textContent = "Your Short is ready";
+  }
 
-  result.clips.forEach((clip, index) => {
-    const item = document.createElement("p");
-    item.style.padding = "10px 0";
-    item.style.borderBottom = "1px solid #29283b";
+  const details = $("clipDetails");
 
-    item.textContent =
-      `${index + 1}. ${Number(clip.start).toFixed(1)}s – ${Number(clip.end).toFixed(1)}s: ${clip.reason}`;
+  if (details) {
+    details.replaceChildren();
 
-    $("clipDetails").appendChild(item);
+    if (Array.isArray(result.clips)) {
+      result.clips.forEach((clip, index) => {
+        const line = document.createElement("p");
+
+        const start = Number(clip.start || 0).toFixed(1);
+        const end = Number(clip.end || 0).toFixed(1);
+
+        line.textContent =
+          `Clip ${index + 1}: ${start}s – ${end}s` +
+          (clip.reason ? ` — ${clip.reason}` : "");
+
+        details.appendChild(line);
+      });
+    }
+  }
+
+  panel.scrollIntoView({
+    behavior: "smooth",
+    block: "start"
   });
-
-  panel.classList.remove("hidden");
-  panel.scrollIntoView({ behavior: "smooth" });
 }
 
-async function createShort(file) {
+async function createShort() {
+  if (activeRequest) {
+    setStatus("An upload is already running.");
+    return;
+  }
+
+  const file = fileInput?.files?.[0];
+
   if (!file) {
-    setStatus("Choose a video file first.", true);
+    setStatus("Please choose a video first.");
     return;
   }
 
   if (!file.type.startsWith("video/")) {
-    setStatus("Please select a video file.", true);
+    setStatus("That file does not appear to be a supported video.");
     return;
   }
 
+  if (file.size > CONFIG.maxFileSize) {
+    setStatus("This video is larger than the current 100 MB upload limit.");
+    return;
+  }
+
+  pollToken++;
+  const token = pollToken;
   currentJob = null;
 
-  const button = $("uploadBtn");
-  button.disabled = true;
-  button.textContent = "Uploading...";
+  setButton(true, "Uploading...");
 
-  $("shortPreview")?.classList.add("hidden");
+  if ($("shortPreview")) {
+    $("shortPreview").hidden = true;
+  }
 
   showProgress();
+
   updateProgress({
     stage: "queued",
     progress: 0,
-    message: "Preparing your upload."
+    message: "Preparing your video..."
   });
 
-  const form = new FormData();
-  form.append("movie", file);
-
-  const request = new XMLHttpRequest();
-  request.open("POST", "/api/create-short");
-
-  request.upload.onprogress = event => {
-    if (event.lengthComputable) {
-      const percent = Math.round(event.loaded / event.total * 100);
-
-      updateProgress({
-        stage: "saving",
-        progress: Math.min(percent, 10),
-        message: `Uploading your video: ${percent}%`
-      });
-    }
-  };
-
-  request.onload = async () => {
-    button.disabled = false;
-    button.textContent = "Analyse video & create Short";
-
-    try {
-      const data = JSON.parse(request.responseText);
-
-      if (request.status !== 202 || !data.id) {
-        throw new Error(data.error || "Could not start processing.");
-      }
-
-      currentJob = data.id;
-
-      setStatus("Upload complete. AI processing has started.");
-
-      await checkJob(data.id);
-
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  };
-
-  request.onerror = () => {
-    button.disabled = false;
-    button.textContent = "Analyse video & create Short";
-    setStatus("Connection failed. Please try again.", true);
-  };
-
-  request.send(form);
-}
-
-$("movieFile").addEventListener("change", () => {
-  const file = $("movieFile").files[0];
-
-  $("fileName").textContent = file
-    ? `${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`
-    : "No video selected";
-});
-
-$("uploadBtn").addEventListener("click", () => {
-  createShort($("movieFile").files[0]);
-});
-
-$("copyBtn").addEventListener("click", async () => {
-  const text = $("script").value.trim();
-
-  if (!text) {
-    setStatus("There is no script to copy.", true);
-    return;
-  }
-
   try {
-    await navigator.clipboard.writeText(text);
-    setStatus("Script copied.");
-  } catch {
-    setStatus("Please select and copy the script manually.");
-  }
-});
+    const data = await uploadVideo(file);
 
-$("voiceBtn").addEventListener("click", async () => {
-  const text = $("script").value.trim();
+    currentJob = data.id;
 
-  if (!text) {
-    setStatus("Write a narration first.", true);
-    return;
-  }
+    setStatus("Upload confirmed. AI is now analysing your video.");
 
-  const button = $("voiceBtn");
-  button.disabled = true;
-  button.textContent = "Generating...";
-
-  try {
-    const response = await fetch("/api/voice", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text })
-    });
-
-    if (!response.ok) {
-      const data = await response.json();
-      throw new Error(data.error || "Voice generation failed.");
-    }
-
-    const blob = await response.blob();
-
-    if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
-
-    currentAudioUrl = URL.createObjectURL(blob);
-
-    $("audio").src = currentAudioUrl;
-    $("audio").classList.remove("hidden");
-
-    $("downloadAudio").href = currentAudioUrl;
-    $("downloadAudio").classList.remove("hidden");
-
-    setStatus("Voice generated successfully.");
+    await checkJob(data.id, token);
 
   } catch (error) {
-    setStatus(error.message, true);
+    setStatus(error.message || "Something went wrong.");
+
+    updateProgress({
+      stage: "error",
+      progress: 0,
+      message: error.message || "Processing failed."
+    });
+
   } finally {
-    button.disabled = false;
-    button.textContent = "Generate voice";
+    if (token === pollToken) {
+      setButton(false, "Create my Short");
+    }
   }
-});
-      
+}
+
+if (uploadBtn) {
+  uploadBtn.addEventListener("click", createShort);
+}
+
+if ($("copyBtn")) {
+  $("copyBtn").addEventListener("click", async () => {
+    const script = $("script")?.value || "";
+
+    if (!script.trim()) {
+      setStatus("There is no narration text to copy.");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(script);
+      setStatus("Narration copied.");
+    } catch {
+      setStatus("Copy failed. Please copy the text manually.");
+    }
+  });
+}
+
+selectSource("upload");
+    
