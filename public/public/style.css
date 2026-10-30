@@ -1,0 +1,37 @@
+*{box-sizing:border-box}
+body{margin:0;background:#101014;color:#f4f2f7;font-family:Inter,system-ui,sans-serif}
+.topbar{height:70px;border-bottom:1px solid #292832;display:flex;align-items:center;justify-content:space-between;padding:0 22px}
+.brand{font-weight:900;letter-spacing:1.5px;color:#fff;text-decoration:none}
+.brand span{color:#a78bfa}
+.tag,.eyebrow{font-size:10px;letter-spacing:2px;color:#a78bfa;font-weight:800}
+main{width:min(900px,calc(100% - 32px));margin:auto}
+.hero{padding:58px 4px 30px}
+.hero h1{font-size:clamp(42px,8vw,72px);line-height:.98;letter-spacing:-3px;margin:14px 0}
+.hero h1 span{color:#a78bfa}
+.sub{color:#aaa7b5;max-width:550px;line-height:1.7}
+.panel{background:#19181f;border:1px solid #302e39;border-radius:18px;padding:22px;margin:18px 0}
+.tabs{display:flex;gap:8px;margin-bottom:20px}
+.tab,.secondary{background:#292733;color:#c9c5d2;border:1px solid #3b3946;border-radius:10px;padding:11px 15px;font-weight:700}
+.tab.active{background:#3a3158;color:#fff;border-color:#8065c5}
+.pane{display:grid;gap:14px}
+.hidden{display:none!important}
+.dropzone{border:1.5px dashed #62547d;background:#211d2c;border-radius:14px;min-height:175px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;text-align:center;padding:20px;cursor:pointer}
+.uploadIcon{font-size:32px;color:#b79cff}
+.dropzone span,.hint,.voiceInfo span{color:#aaa7b5;font-size:13px}
+.dropzone small{color:#817b8c}
+.primary{background:#9470ed;color:#fff;border:0;border-radius:10px;padding:14px 18px;font-weight:800;font-size:14px;cursor:pointer}
+.primary:disabled{opacity:.55;cursor:wait}
+.field{width:100%;background:#111116;color:#fff;border:1px solid #45414f;border-radius:10px;padding:14px;font-size:15px}
+.hint{line-height:1.5}
+.status{min-height:20px;color:#c6b5ff;font-size:13px}
+.sectionHead,.voiceRow{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.sectionHead h2{margin:5px 0 16px;font-size:23px}
+.script{width:100%;min-height:260px;resize:vertical;background:#111116;color:#eee;border:1px solid #393642;border-radius:12px;padding:16px;line-height:1.7;font:15px/1.7 inherit}
+.voiceRow{border-top:1px solid #302e39;margin-top:18px;padding-top:18px}
+.voiceInfo{display:grid;gap:5px}
+.small{padding:12px 15px}
+.audio{width:100%;margin-top:18px}
+.download{display:inline-block;color:#c6b5ff;margin-top:12px}
+footer{padding:20px 4px 45px;color:#777381;font-size:12px;line-height:1.6}
+@media(max-width:560px){.tag{font-size:8px}.hero{padding-top:42px}.panel{padding:16px}.sectionHead{align-items:flex-start}.voiceRow{align-items:flex-start;flex-direction:column}.voiceRow button{width:100%}}
+                        
