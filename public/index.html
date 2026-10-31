@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101014">
   <title>ReelNarrator — AI Video Studio</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=3">
 </head>
 <body>
 
@@ -25,7 +25,6 @@
     </p>
   </section>
 
-  <!-- VIDEO SOURCE -->
   <section class="panel">
     <p class="eyebrow">01 — VIDEO SOURCE</p>
     <h2>Choose your video</h2>
@@ -59,13 +58,11 @@
         placeholder="https://www.youtube.com/watch?v=..."
       >
       <p class="hint">
-        Video analysis and editing require an accessible, authorised video source.
-        Not every YouTube link can be processed.
+        YouTube link processing is not connected yet. Upload a video you have permission to edit.
       </p>
     </div>
   </section>
 
-  <!-- VIDEO FORMAT -->
   <section class="panel">
     <p class="eyebrow">02 — VIDEO FORMAT</p>
     <h2>Choose your dimensions</h2>
@@ -94,36 +91,14 @@
     </div>
   </section>
 
-  <!-- CLIP SETTINGS -->
   <section class="panel">
     <p class="eyebrow">03 — CLIP SELECTION</p>
-    <h2>Editing preferences</h2>
-
-    <label for="videoLength">Target video length</label>
-    <select id="videoLength" class="field">
-      <option value="30">30 seconds</option>
-      <option value="45" selected>45 seconds</option>
-      <option value="60">60 seconds</option>
-      <option value="90">90 seconds</option>
-      <option value="120">2 minutes</option>
-    </select>
-
-    <label for="editingStyle">Editing style</label>
-    <select id="editingStyle" class="field">
-      <option value="storytelling">Storytelling</option>
-      <option value="cinematic">Cinematic</option>
-      <option value="fast-paced">Fast-paced</option>
-      <option value="dramatic">Dramatic</option>
-      <option value="documentary">Documentary</option>
-    </select>
-
-    <label class="checkOption">
-      <input type="checkbox" id="autoSelect" checked>
-      <span>Let AI select the most interesting moments</span>
-    </label>
+    <h2>Choose how scenes are selected</h2>
+    <p class="hint">
+      Auto lets AI choose scenes. Manual lets you enter the timestamps yourself.
+    </p>
   </section>
 
-  <!-- CAPTIONS -->
   <section class="panel">
     <p class="eyebrow">04 — CAPTIONS</p>
     <h2>Subtitle settings</h2>
@@ -149,7 +124,6 @@
     </select>
   </section>
 
-  <!-- HOOK AND TITLES -->
   <section class="panel">
     <p class="eyebrow">05 — HOOK & TITLES</p>
     <h2>Make people stop scrolling</h2>
@@ -160,47 +134,26 @@
     </label>
 
     <label for="customHook">Your own hook (optional)</label>
-    <input
-      id="customHook"
-      class="field"
-      type="text"
-      placeholder="Enter your opening line..."
-    >
+    <input id="customHook" class="field" type="text"
+      placeholder="Enter your opening line...">
 
     <label for="tiktokTitle">TikTok title / caption</label>
-    <textarea
-      id="tiktokTitle"
-      class="script"
-      rows="3"
-      placeholder="AI-generated TikTok caption will appear here..."
-    ></textarea>
+    <textarea id="tiktokTitle" class="script" rows="3"
+      placeholder="AI-generated TikTok caption will appear here..."></textarea>
 
     <label for="youtubeTitle">YouTube Shorts title</label>
-    <input
-      id="youtubeTitle"
-      class="field"
-      type="text"
-      placeholder="Enter or generate your YouTube title..."
-    >
+    <input id="youtubeTitle" class="field" type="text"
+      placeholder="Enter or generate your YouTube title...">
 
     <label for="youtubeDescription">YouTube description</label>
-    <textarea
-      id="youtubeDescription"
-      class="script"
-      rows="3"
-      placeholder="Your YouTube description..."
-    ></textarea>
+    <textarea id="youtubeDescription" class="script" rows="3"
+      placeholder="Your YouTube description..."></textarea>
 
     <label for="hashtags">Hashtags</label>
-    <input
-      id="hashtags"
-      class="field"
-      type="text"
-      placeholder="#Shorts #TikTok"
-    >
+    <input id="hashtags" class="field" type="text"
+      placeholder="#Shorts #TikTok">
   </section>
 
-  <!-- AUDIO -->
   <section class="panel">
     <p class="eyebrow">06 — AUDIO</p>
     <h2>Narration & background sound</h2>
@@ -210,13 +163,9 @@
       <span>Include AI narration</span>
     </label>
 
-    <label for="narrationScript">Narration script</label>
-    <textarea
-      id="script"
-      class="script"
-      rows="5"
-      placeholder="Write your narration or let AI generate it..."
-    ></textarea>
+    <label for="script">Narration script</label>
+    <textarea id="script" class="script" rows="5"
+      placeholder="Write your narration or let AI generate it..."></textarea>
 
     <label class="checkOption">
       <input type="checkbox" id="musicEnabled">
@@ -233,23 +182,21 @@
     </select>
   </section>
 
-  <!-- CREATE -->
   <section class="panel">
     <p class="eyebrow">07 — CREATE YOUR VIDEO</p>
     <h2>Ready to edit?</h2>
 
     <p class="hint">
-      Your selected settings will guide the AI editing process.
+      Your selected settings will guide the editing process.
     </p>
 
     <button id="uploadBtn" class="primary" type="button">
-      Analyse video & create Short
+      Create my Short
     </button>
 
     <p id="status" class="status" aria-live="polite"></p>
   </section>
 
-  <!-- PROGRESS AND PREVIEW -->
   <section id="processingPanel" class="panel hidden">
     <p class="eyebrow">PROCESSING</p>
     <h2 id="processingTitle">Preparing your video</h2>
@@ -266,26 +213,19 @@
   <section id="shortPreview" class="panel hidden">
     <p class="eyebrow">YOUR FINISHED VIDEO</p>
     <h2 id="shortTitle">Your Short</h2>
-    <video
-      id="shortVideo"
-      controls
-      playsinline
-      style="width:100%;max-height:600px;background:#000;border-radius:12px"
-    ></video>
+
+    <video id="shortVideo" controls playsinline
+      style="width:100%;max-height:600px;background:#000;border-radius:12px"></video>
 
     <div id="clipDetails"></div>
 
-    <a
-      id="shortDownload"
-      class="primary"
+    <a id="shortDownload" class="primary"
       style="display:block;text-align:center;text-decoration:none;margin-top:18px"
-      download="reelnarrator-video.mp4"
-    >
+      download="reelnarrator-video.mp4">
       Download finished video
     </a>
   </section>
 
-  <!-- SCRIPT TOOLS -->
   <section class="panel">
     <p class="eyebrow">EXTRA TOOLS</p>
     <h2>Voice generation</h2>
@@ -300,11 +240,8 @@
 
     <audio id="audio" controls class="audio hidden"></audio>
 
-    <a
-      id="downloadAudio"
-      class="download hidden"
-      download="reelnarrator.mp3"
-    >
+    <a id="downloadAudio" class="download hidden"
+      download="reelnarrator.mp3">
       Download narration audio
     </a>
   </section>
@@ -318,7 +255,6 @@
 
 </main>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=3"></script>
 </body>
-  </html>
-  
+</html>
