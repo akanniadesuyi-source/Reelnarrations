@@ -106,7 +106,7 @@ function parseJSON(text, serviceName) {
 
 function validateClips(clips) {
   if (!Array.isArray(clips) || clips.length < 2 || clips.length > 6) {
-    throw new Error("AI could not find 2 to 6 suitable scenes.");
+    throw new Error("Please select between 2 and 6 scenes.");
   }
 
   const valid = clips.map(clip => ({
@@ -127,7 +127,7 @@ function validateClips(clips) {
       !clip.description
     ) {
       throw new Error(
-        "Gemini returned an invalid scene description or timestamp."
+        "A scene has invalid timestamps or is missing its description."
       );
     }
   }
@@ -140,10 +140,36 @@ function validateClips(clips) {
   );
 
   if (total < 10 || total > 90) {
-    throw new Error("AI selected an unsuitable total video length.");
+    throw new Error("Selected scenes must total between 10 and 90 seconds.");
   }
 
   return valid;
+}
+
+function getManualClips(value) {
+  let clips;
+
+  try {
+    clips = typeof value === "string"
+      ? JSON.parse(value)
+      : value;
+  } catch {
+    throw new Error("Manual timestamps are not valid JSON.");
+  }
+
+  if (!Array.isArray(clips)) {
+    throw new Error("Please provide your manual scene timestamps.");
+  }
+
+  return validateClips(
+    clips.map((clip, index) => ({
+      start: clip.start,
+      end: clip.end,
+      reason: clip.reason || "Manually selected scene",
+      description:
+        clip.description || `Scene ${index + 1} selected by the user`
+    }))
+  );
 }
 
 async function generateContentWithRetry(request, jobId) {
@@ -532,7 +558,7 @@ async function combineNarration(videoPath, audioPath, outputPath, jobId) {
   ]);
 }
 
-async function processVideo(jobId, buffer, mimeType) {
+async function processVideo(jobId, buffer, mimeType, mode, manualClips) {
   const directory = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), "reelnarrator-")
   );
@@ -554,7 +580,21 @@ async function processVideo(jobId, buffer, mimeType) {
 
     await fs.promises.writeFile(inputPath, buffer);
 
-    const analysis = await analyseVideo(inputPath, mimeType, jobId);
+    let analysis;
+
+    if (mode === "manual") {
+      updateJob(jobId, {
+        stage: "selecting",
+        progress: 38,
+        message: "Using your manually selected scenes..."
+      });
+
+      analysis = {
+        clips: getManualClips(manualClips)
+      };
+    } else {
+      analysis = await analyseVideo(inputPath, mimeType, jobId);
+    }
 
     updateJob(jobId, {
       stage: "selecting",
@@ -659,7 +699,7 @@ app.post("/api/create-short", (req, res) => {
     if (!ai) {
       return res.status(500).json({
         ok: false,
-        error: "GEMINI_API_KEY is missing."
+        error: "GEMINI_API_KEY is missing. It is still needed for voice generation."
       });
     }
 
@@ -684,6 +724,19 @@ app.post("/api/create-short", (req, res) => {
       });
     }
 
+    const mode = req.body.mode === "manual" ? "manual" : "auto";
+
+    if (mode === "manual") {
+      try {
+        getManualClips(req.body.manualClips);
+      } catch (validationError) {
+        return res.status(400).json({
+          ok: false,
+          error: validationError.message
+        });
+      }
+    }
+
     const id = crypto.randomUUID();
 
     jobs.set(id, {
@@ -704,7 +757,13 @@ app.post("/api/create-short", (req, res) => {
       statusUrl: `/api/jobs/${id}`
     });
 
-    processVideo(id, req.file.buffer, req.file.mimetype);
+    processVideo(
+      id,
+      req.file.buffer,
+      req.file.mimetype,
+      mode,
+      req.body.manualClips
+    );
   });
 });
 
@@ -741,7 +800,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     service: "ReelNarrator",
-    editor: "AI-analysis-recap-writing-and-voice-rendering",
+    editor: "AI-analysis-manual-scene-selection-recap-writing-and-voice-rendering",
     geminiConfigured: Boolean(GEMINI_KEY),
     geminiTtsConfigured: Boolean(GEMINI_KEY),
     geminiTtsModel: GEMINI_TTS_MODEL,
@@ -763,25 +822,4 @@ setInterval(async () => {
     jobs.delete(id);
 
     if (job.directory) {
-      await fs.promises.rm(job.directory, {
-        recursive: true,
-        force: true
-      }).catch(() => {});
-    }
-  }
-}, 10 * 60 * 1000).unref();
-
-app.use((error, req, res, next) => {
-  console.error(error);
-
-  if (res.headersSent) return next(error);
-
-  res.status(500).json({
-    ok: false,
-    error: error.message || "Unexpected server error."
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(`ReelNarrator running on port ${PORT}`);
-});
+      await fs.promises.rm(job.director
