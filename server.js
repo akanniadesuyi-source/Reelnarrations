@@ -1,3 +1,4 @@
+
 import express from "express";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
@@ -40,7 +41,7 @@ function updateJob(id, values) {
   if (!job) return;
 
   Object.assign(job, values, {
-    updatedAt: new Date().toISOString()
+    updatedAt: Date.now()
   });
 }
 
@@ -100,19 +101,30 @@ async function generateContentWithRetry(request, jobId) {
     try {
       return await ai.models.generateContent(request);
     } catch (error) {
+      // Log the original Gemini error.
+      console.error("GEMINI RAW ERROR:", {
+        name: error?.name,
+        status:
+          error?.status ??
+          error?.code ??
+          error?.response?.status ??
+          error?.error?.code,
+        message: error?.message,
+        details: error?.error
+      });
+
       const canRetry =
         attempt < maxAttempts && isRetryableGeminiError(error);
 
       if (!canRetry) {
-        if (isRetryableGeminiError(error)) {
-          throw new Error(
-            "Gemini is still unavailable after several attempts. Please try again later."
-          );
-        }
-        throw error;
+        throw new Error(
+          `Gemini request failed: ${
+            error?.message || "Unknown Gemini error"
+          }`
+        );
       }
 
-      const waitMs = waitTimes[attempt - 1] || 10000;
+      const waitMs = waitTimes[attempt - 1];
       const waitSeconds = Math.ceil(waitMs / 1000);
 
       console.warn(
@@ -445,8 +457,6 @@ async function processVideo(jobId, buffer, mimeType) {
       message: "Verifying the finished video..."
     });
 
-    // Confirm the output can be opened and read before reporting ready.
-    const verifyPath = path.join(directory, "verify-output.mp4");
     await runCommand(ffmpegPath, [
       "-v", "error",
       "-i", outputPath,
@@ -513,7 +523,6 @@ function getReadyVideo(req, res, download = false) {
     return res.download(outputPath, "reelnarrator-short.mp4");
   }
 
-  // Express sendFile supports byte-range requests needed by HTML video players.
   return res.sendFile(outputPath, {
     headers: {
       "Content-Type": "video/mp4",
@@ -629,7 +638,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Periodically remove expired jobs and their temporary files.
+// Remove expired jobs and their temporary files.
 setInterval(async () => {
   const now = Date.now();
 
