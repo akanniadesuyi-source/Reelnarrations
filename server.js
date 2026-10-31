@@ -728,4 +728,41 @@ app.get("/api/jobs/:id/video", (req, res) => {
 
   const file = path.join(job.directory, "final.mp4");
   if (!fs.existsSync(file)) {
-    r
+        return res.status(404).json({ error: "Video file not found." });
+  }
+
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Content-Disposition", 'inline; filename="reelnarrations.mp4"');
+  res.sendFile(file);
+});
+
+app.get("/api/jobs/:id/download", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job || job.stage !== "ready") {
+    return res.status(404).json({ error: "Video is not ready yet." });
+  }
+
+  const file = path.join(job.directory, "final.mp4");
+  if (!fs.existsSync(file)) {
+    return res.status(404).json({ error: "Video file not found." });
+  }
+
+  res.download(file, "reelnarrations.mp4");
+});
+
+setInterval(() => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+
+  for (const [id, job] of jobs.entries()) {
+    if (job.createdAt < cutoff) {
+      jobs.delete(id);
+      try {
+        fs.rmSync(job.directory, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+}, 60 * 60 * 1000).unref();
+
+app.listen(PORT, () => {
+  console.log(`ReelNarrations server listening on port ${PORT}`);
+});
