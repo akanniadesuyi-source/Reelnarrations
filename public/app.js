@@ -1,4 +1,3 @@
-
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -30,7 +29,10 @@ function setButton(disabled, label) {
 
 function showProgress() {
   const panel = $("processingPanel");
-  if (panel) panel.hidden = false;
+  if (panel) {
+    panel.hidden = false;
+    panel.classList.remove("hidden");
+  }
 }
 
 function updateProgress(job) {
@@ -40,7 +42,9 @@ function updateProgress(job) {
 
   if ($("processingTitle")) {
     $("processingTitle").textContent =
-      job.stage === "ready" ? "Your video is ready" : "Creating your Short";
+      job.stage === "ready" ? "Your video is ready" :
+      job.stage === "error" ? "Video processing failed" :
+      "Creating your Short";
   }
 
   if ($("processingMessage")) {
@@ -62,6 +66,7 @@ function updateProgress(job) {
     "analysing",
     "selecting",
     "rendering",
+    "finalising",
     "ready"
   ];
 
@@ -97,7 +102,7 @@ function selectSource(source) {
 
   if (source === "youtube") {
     setStatus(
-      "YouTube link processing is not connected yet. Upload an authorised video file for now."
+      "YouTube link processing is not connected yet. Upload a video you have permission to edit."
     );
   } else {
     setStatus("Choose a video to get started.");
@@ -143,9 +148,7 @@ function uploadVideo(file) {
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable && event.total > 0) {
-        const percent = Math.round(
-          (event.loaded / event.total) * 100
-        );
+        const percent = Math.round((event.loaded / event.total) * 100);
 
         updateProgress({
           stage: "saving",
@@ -155,7 +158,7 @@ function uploadVideo(file) {
 
         setStatus(`Uploading video: ${percent}%`);
       } else {
-        setStatus("Uploading video... waiting for upload progress.");
+        setStatus("Uploading video...");
       }
     };
 
@@ -172,18 +175,14 @@ function uploadVideo(file) {
         data = JSON.parse(xhr.responseText);
       } catch {
         reject(
-          new Error(
-            `Server returned an invalid response (HTTP ${xhr.status}).`
-          )
+          new Error(`Server returned an invalid response (HTTP ${xhr.status}).`)
         );
         return;
       }
 
       if (xhr.status < 200 || xhr.status >= 300) {
         reject(
-          new Error(
-            data.error || `Server upload failed (HTTP ${xhr.status}).`
-          )
+          new Error(data.error || `Upload failed (HTTP ${xhr.status}).`)
         );
         return;
       }
@@ -205,9 +204,7 @@ function uploadVideo(file) {
 
     xhr.ontimeout = () => {
       activeRequest = null;
-      reject(
-        new Error("Upload timed out. Try a smaller video or a stronger connection.")
-      );
+      reject(new Error("Upload timed out. Try a smaller video or stronger connection."));
     };
 
     xhr.onabort = () => {
@@ -221,40 +218,35 @@ function uploadVideo(file) {
 
 async function checkJob(jobId, token) {
   while (currentJob === jobId && token === pollToken) {
+    const response = await fetch(
+      `/api/jobs/${encodeURIComponent(jobId)}`,
+      { cache: "no-store" }
+    );
+
+    let job;
+
     try {
-      const response = await fetch(
-        `/api/jobs/${encodeURIComponent(jobId)}`,
-        { cache: "no-store" }
+      job = await response.json();
+    } catch {
+      throw new Error("The server returned an invalid job status.");
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        job.error || `Could not check job status (HTTP ${response.status}).`
       );
+    }
 
-      let job;
+    updateProgress(job);
 
-      try {
-        job = await response.json();
-      } catch {
-        throw new Error("The server returned an invalid job status.");
-      }
+    if (job.stage === "ready" && job.result) {
+      showResult(job.result);
+      setStatus("Your video is ready.");
+      return;
+    }
 
-      if (!response.ok) {
-        throw new Error(
-          job.error || `Could not check job status (HTTP ${response.status}).`
-        );
-      }
-
-      updateProgress(job);
-
-      if (job.stage === "ready" && job.result) {
-        showResult(job.result);
-        setStatus("Your video is ready.");
-        return;
-      }
-
-      if (job.stage === "error" || job.error) {
-        throw new Error(job.message || job.error || "Video processing failed.");
-      }
-    } catch (error) {
-      if (token !== pollToken) return;
-      throw error;
+    if (job.stage === "error" || job.error) {
+      throw new Error(job.message || job.error || "Video processing failed.");
     }
 
     await new Promise((resolve) => {
@@ -265,22 +257,46 @@ async function checkJob(jobId, token) {
 
 function showResult(result) {
   const panel = $("shortPreview");
-  if (!panel) return;
-
-  panel.hidden = false;
-
   const video = $("shortVideo");
   const download = $("shortDownload");
 
-  if (video && result.videoUrl) {
-    video.src = result.videoUrl;
-    video.load();
+  if (!panel || !video || !download) {
+    setStatus("The video is ready, but the preview section is missing from the page.");
+    return;
   }
 
-  if (download && result.downloadUrl) {
-    download.href = result.downloadUrl;
-    download.hidden = false;
+  const videoUrl = result.videoUrl;
+  const downloadUrl = result.downloadUrl;
+
+  if (!videoUrl || !downloadUrl) {
+    panel.hidden = false;
+    panel.classList.remove("hidden");
+    setStatus("The server marked the job ready but did not return video links.");
+    return;
   }
+
+  panel.hidden = false;
+  panel.classList.remove("hidden");
+
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+
+  video.src = videoUrl;
+  video.load();
+
+  video.onerror = () => {
+    setStatus(
+      "The video preview could not load. The file may have expired or the server restarted. Try creating it again."
+    );
+  };
+
+  video.onloadedmetadata = () => {
+    setStatus("Preview loaded. Your video is ready to watch or download.");
+  };
+
+  download.href = downloadUrl;
+  download.hidden = false;
 
   if ($("shortTitle")) {
     $("shortTitle").textContent = "Your Short is ready";
@@ -294,7 +310,6 @@ function showResult(result) {
     if (Array.isArray(result.clips)) {
       result.clips.forEach((clip, index) => {
         const line = document.createElement("p");
-
         const start = Number(clip.start || 0).toFixed(1);
         const end = Number(clip.end || 0).toFixed(1);
 
@@ -344,6 +359,7 @@ async function createShort() {
 
   if ($("shortPreview")) {
     $("shortPreview").hidden = true;
+    $("shortPreview").classList.add("hidden");
   }
 
   showProgress();
@@ -358,11 +374,9 @@ async function createShort() {
     const data = await uploadVideo(file);
 
     currentJob = data.id;
-
     setStatus("Upload confirmed. AI is now analysing your video.");
 
     await checkJob(data.id, token);
-
   } catch (error) {
     setStatus(error.message || "Something went wrong.");
 
@@ -371,7 +385,6 @@ async function createShort() {
       progress: 0,
       message: error.message || "Processing failed."
     });
-
   } finally {
     if (token === pollToken) {
       setButton(false, "Create my Short");
@@ -402,4 +415,4 @@ if ($("copyBtn")) {
 }
 
 selectSource("upload");
-    
+      
