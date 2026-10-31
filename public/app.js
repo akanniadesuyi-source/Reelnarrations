@@ -1,517 +1,477 @@
-"use strict";
+const $ = id => document.getElementById(id);
 
-const $ = (id) => document.getElementById(id);
-
-const CONFIG = {
-  maxFileSize: 100 * 1024 * 1024,
-  uploadTimeout: 5 * 60 * 1000,
-  pollInterval: 2500,
-  minClips: 2,
-  maxClips: 6
+const state = {
+  jobId: null,
+  pollTimer: null,
+  scenes: [],
+  script: "",
+  geminiKey: ""
 };
 
-let currentJob = null;
-let activeRequest = null;
-let pollToken = 0;
+const keyInput = $("geminiApiKey");
+const keyStatus = $("apiKeyStatus");
+const videoInput = $("movieVideo");
+const manualScenes = $("manualScenes");
+const sceneList = $("sceneList");
+const createButton = $("createShort");
+const progressSection = $("progressSection");
+const progressBar = $("progressBar");
+const progressPercent = $("progressPercent");
+const progressMessage = $("progressMessage");
+const createStatus = $("createStatus");
+const scriptSection = $("scriptSection");
+const resultSection = $("resultSection");
 
-const uploadBtn = $("uploadBtn");
-const fileInput = $("movieFile");
-const fileName = $("fileName");
-
-function setStatus(message) {
-  const status = $("status");
-  if (status) status.textContent = message;
+function show(element, visible = true) {
+  if (element) element.classList.toggle("hidden", !visible);
 }
 
-function setButton(disabled, label) {
-  if (!uploadBtn) return;
-  uploadBtn.disabled = disabled;
-  uploadBtn.textContent = label;
+function setStatus(element, message, isError = false) {
+  if (!element) return;
+  element.textContent = message || "";
+  element.classList.toggle("error", Boolean(isError));
 }
 
-function showProgress() {
-  const panel = $("processingPanel");
-  if (panel) {
-    panel.hidden = false;
-    panel.classList.remove("hidden");
-  }
+function setProgress(percent, message) {
+  const value = Math.max(0, Math.min(100, Number(percent) || 0));
+  progressBar.style.width = `${value}%`;
+  progressPercent.textContent = `${Math.round(value)}%`;
+  progressMessage.textContent = message || "Working...";
+  show(progressSection);
 }
 
-function updateProgress(job) {
-  showProgress();
-
-  const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
-
-  if ($("processingTitle")) {
-    $("processingTitle").textContent =
-      job.stage === "ready" ? "Your video is ready" :
-      job.stage === "error" ? "Video processing failed" :
-      "Creating your Short";
-  }
-
-  if ($("processingMessage")) {
-    $("processingMessage").textContent =
-      job.message || "Please wait while your video is processed.";
-  }
-
-  if ($("progressBar")) {
-    $("progressBar").style.width = `${progress}%`;
-  }
-
-  if ($("progressNumber")) {
-    $("progressNumber").textContent = `${progress}%`;
-  }
-
-  const stages = [
-    "queued", "saving", "analysing",
-    "selecting", "rendering", "finalising", "ready"
-  ];
-
-  const currentIndex = stages.indexOf(job.stage);
-
-  document.querySelectorAll("#processingSteps [data-stage]").forEach((item) => {
-    const index = stages.indexOf(item.dataset.stage);
-    item.classList.toggle("completed", index !== -1 && index < currentIndex);
-    item.classList.toggle("current", item.dataset.stage === job.stage);
-  });
+function formatTime(seconds) {
+  const value = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(value / 60);
+  const remaining = value % 60;
+  return `${minutes}:${String(remaining).padStart(2, "0")}`;
 }
 
-/* SOURCE TABS */
+function parseTime(value) {
+  const text = String(value || "").trim();
+  if (!text) return NaN;
 
-function selectSource(source) {
-  document.querySelectorAll(".tab[data-source]").forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.source === source);
-  });
+  if (/^\d+(\.\d+)?$/.test(text)) return Number(text);
 
-  if ($("uploadPane")) $("uploadPane").hidden = source !== "upload";
-  if ($("youtubePane")) $("youtubePane").hidden = source !== "youtube";
+  const parts = text.split(":").map(Number);
+  if (parts.some(part => !Number.isFinite(part))) return NaN;
 
-  setStatus(
-    source === "youtube"
-      ? "YouTube link processing is not connected yet. Upload a video you have permission to edit."
-      : "Choose a video to get started."
-  );
-}
-
-document.querySelectorAll(".tab[data-source]").forEach((tab) => {
-  tab.addEventListener("click", () => selectSource(tab.dataset.source));
-});
-
-/* MANUAL SCENE CONTROLS */
-
-function renumberScenes() {
-  document.querySelectorAll(".manual-clip").forEach((row, index) => {
-    const title = row.querySelector(".scene-title");
-    if (title) title.textContent = `Scene ${index + 1}`;
-  });
-}
-
-function addManualScene() {
-  const list = $("manualClipList");
-  if (!list) return;
-
-  if (list.querySelectorAll(".manual-clip").length >= CONFIG.maxClips) {
-    setStatus("You can select a maximum of 6 scenes.");
-    return;
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
   }
 
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+
+  return NaN;
+}
+
+function addSceneRow(scene = {}) {
   const row = document.createElement("div");
-  row.className = "manual-clip";
-  row.style.cssText = "margin:14px 0;padding:12px;border:1px solid rgba(128,128,128,.3);border-radius:10px;";
+  row.className = "scene-row";
 
-  row.innerHTML = `
-    <strong class="scene-title"></strong>
-    <label>Start time (seconds)
-      <input class="field manual-start" type="number" min="0" step="0.1" placeholder="e.g. 50">
-    </label>
-    <label>End time (seconds)
-      <input class="field manual-end" type="number" min="0" step="0.1" placeholder="e.g. 65">
-    </label>
-    <button class="secondary remove-scene" type="button">Remove scene</button>
-  `;
+  const start = document.createElement("input");
+  start.type = "text";
+  start.placeholder = "Start (e.g. 00:12)";
+  start.value = scene.startText || formatTime(scene.start || 0);
+  start.setAttribute("aria-label", "Scene start time");
 
-  list.appendChild(row);
-  renumberScenes();
+  const end = document.createElement("input");
+  end.type = "text";
+  end.placeholder = "End (e.g. 00:20)";
+  end.value = scene.endText || formatTime(scene.end || 0);
+  end.setAttribute("aria-label", "Scene end time");
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "text-button";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", () => {
+    row.remove();
+    updateSceneNumbers();
+  });
+
+  row.append(start, end, remove);
+  row.dataset.scene = "true";
+  sceneList.appendChild(row);
+  updateSceneNumbers();
 }
 
-function getManualClips() {
-  const rows = document.querySelectorAll(".manual-clip");
+function updateSceneNumbers() {
+  [...sceneList.querySelectorAll(".scene-row")].forEach((row, index) => {
+    row.dataset.number = String(index + 1);
+  });
+}
 
-  if (rows.length < CONFIG.minClips || rows.length > CONFIG.maxClips) {
-    throw new Error("Please select between 2 and 6 scenes.");
+function collectManualScenes() {
+  const rows = [...sceneList.querySelectorAll(".scene-row")];
+
+  if (rows.length < 2 || rows.length > 6) {
+    throw new Error("Add between 2 and 6 scenes.");
   }
 
-  const clips = [];
+  const clips = rows.map((row, index) => {
+    const inputs = row.querySelectorAll("input");
+    const start = parseTime(inputs[0].value);
+    const end = parseTime(inputs[1].value);
 
-  rows.forEach((row, index) => {
-    const start = Number(row.querySelector(".manual-start")?.value);
-    const end = Number(row.querySelector(".manual-end")?.value);
-
-    if (
-      !Number.isFinite(start) ||
-      !Number.isFinite(end) ||
-      start < 0 ||
-      end <= start
-    ) {
-      throw new Error(`Enter valid start and end times for Scene ${index + 1}.`);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      throw new Error(`Check the timestamps for scene ${index + 1}.`);
     }
 
-    if (end - start < 2 || end - start > 25) {
-      throw new Error(`Scene ${index + 1} must be between 2 and 25 seconds.`);
-    }
-
-    clips.push({
+    return {
       start,
       end,
-      description: `Selected scene ${index + 1}`
-    });
+      reason: "Manually selected scene"
+    };
   });
+
+  clips.sort((a, b) => a.start - b.start);
+
+  const total = clips.reduce((sum, clip) => sum + clip.end - clip.start, 0);
+  if (total < 10 || total > 90) {
+    throw new Error("Selected scenes must total between 10 and 90 seconds.");
+  }
 
   return clips;
 }
 
-const clipMode = $("clipMode");
-const manualPanel = $("manualPanel");
-
-if (clipMode && manualPanel) {
-  clipMode.addEventListener("change", () => {
-    manualPanel.hidden = clipMode.value !== "manual";
-    setStatus(
-      clipMode.value === "manual"
-        ? "Manual mode selected. Enter your scene timestamps."
-        : "Auto mode selected. AI will select the scenes."
-    );
-  });
+function getSavedKey() {
+  try {
+    return localStorage.getItem("reelnarrator_gemini_key") || "";
+  } catch {
+    return "";
+  }
 }
 
-if ($("addManualClip")) {
-  $("addManualClip").addEventListener("click", addManualScene);
-}
+function saveGeminiKey() {
+  const key = keyInput.value.trim();
 
-if ($("manualClipList")) {
-  $("manualClipList").addEventListener("click", (event) => {
-    const button = event.target.closest(".remove-scene");
-    if (!button) return;
+  if (!key) {
+    setStatus(keyStatus, "Paste your Gemini API key first.", true);
+    return;
+  }
 
-    const rows = document.querySelectorAll(".manual-clip");
+  state.geminiKey = key;
 
-    if (rows.length <= CONFIG.minClips) {
-      setStatus("Manual mode needs at least 2 scenes.");
-      return;
-    }
-
-    button.closest(".manual-clip").remove();
-    renumberScenes();
-  });
-}
-
-/* FILE SELECTION */
-
-if (fileInput) {
-  fileInput.addEventListener("change", () => {
-    const file = fileInput.files?.[0];
-
-    if (fileName) {
-      fileName.textContent = file ? file.name : "No video selected";
-    }
-
-    if (file) {
-      setStatus(`Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`);
-    }
-  });
-}
-
-/* UPLOAD */
-
-function uploadVideo(file, mode, manualClips) {
-  return new Promise((resolve, reject) => {
-    const formData = new FormData();
-
-    formData.append("mode", mode);
-
-    if (mode === "manual") {
-      formData.append("manualClips", JSON.stringify(manualClips));
-    }
-
-    formData.append("movie", file);
-
-    const xhr = new XMLHttpRequest();
-    activeRequest = xhr;
-
-    xhr.open("POST", "/api/create-short", true);
-    xhr.timeout = CONFIG.uploadTimeout;
-
-    xhr.upload.onloadstart = () => {
-      setStatus("Upload started. Sending your video to the server...");
-    };
-
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable && event.total > 0) {
-        const percent = Math.round((event.loaded / event.total) * 100);
-
-        updateProgress({
-          stage: "saving",
-          progress: Math.min(10, Math.round(percent / 10)),
-          message: `Uploading video: ${percent}%`
-        });
-
-        setStatus(`Uploading video: ${percent}%`);
-      } else {
-        setStatus("Uploading video...");
-      }
-    };
-
-    xhr.upload.onload = () => {
-      setStatus("Upload sent. Waiting for server confirmation...");
-    };
-
-    xhr.onload = () => {
-      activeRequest = null;
-
-      let data;
-
-      try {
-        data = JSON.parse(xhr.responseText);
-      } catch {
-        reject(new Error(`Server returned an invalid response (HTTP ${xhr.status}).`));
-        return;
-      }
-
-      if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(data.error || `Upload failed (HTTP ${xhr.status}).`));
-        return;
-      }
-
-      if (!data.ok || !data.id) {
-        reject(new Error(data.error || "The server did not create a processing job."));
-        return;
-      }
-
-      resolve(data);
-    };
-
-    xhr.onerror = () => {
-      activeRequest = null;
-      reject(new Error("Network error. Check your connection and try again."));
-    };
-
-    xhr.ontimeout = () => {
-      activeRequest = null;
-      reject(new Error("Upload timed out. Try a smaller video or stronger connection."));
-    };
-
-    xhr.onabort = () => {
-      activeRequest = null;
-      reject(new Error("Upload was cancelled."));
-    };
-
-    xhr.send(formData);
-  });
-}
-
-/* JOB STATUS */
-
-async function checkJob(jobId, token) {
-  while (currentJob === jobId && token === pollToken) {
-    const response = await fetch(
-      `/api/jobs/${encodeURIComponent(jobId)}`,
-      { cache: "no-store" }
-    );
-
-    let job;
-
+  if ($("rememberGeminiKey").checked) {
     try {
-      job = await response.json();
+      localStorage.setItem("reelnarrator_gemini_key", key);
+      setStatus(keyStatus, "Key saved on this device.");
     } catch {
-      throw new Error("The server returned an invalid job status.");
+      setStatus(keyStatus, "Could not save locally. The key will be used for this session.");
     }
-
-    if (!response.ok) {
-      throw new Error(job.error || `Could not check job status (HTTP ${response.status}).`);
-    }
-
-    updateProgress(job);
-
-    if (job.stage === "ready" && job.result) {
-      showResult(job.result);
-      setStatus("Your video is ready.");
-      return;
-    }
-
-    if (job.stage === "error" || job.error) {
-      throw new Error(job.message || job.error || "Video processing failed.");
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, CONFIG.pollInterval));
+  } else {
+    try {
+      localStorage.removeItem("reelnarrator_gemini_key");
+    } catch {}
+    setStatus(keyStatus, "Key loaded for this session only.");
   }
 }
 
-/* RESULT */
-
-function showResult(result) {
-  const panel = $("shortPreview");
-  const video = $("shortVideo");
-  const download = $("shortDownload");
-
-  if (!panel || !video || !download) {
-    setStatus("The video is ready, but the preview section is missing.");
-    return;
-  }
-
-  if (!result.videoUrl || !result.downloadUrl) {
-    panel.hidden = false;
-    panel.classList.remove("hidden");
-    setStatus("The server did not return video links.");
-    return;
-  }
-
-  panel.hidden = false;
-  panel.classList.remove("hidden");
-
-  video.pause();
-  video.removeAttribute("src");
-  video.load();
-
-  video.src = result.videoUrl;
-  video.load();
-
-  video.onerror = () => {
-    setStatus("The video preview could not load. Try creating it again.");
-  };
-
-  video.onloadedmetadata = () => {
-    setStatus("Preview loaded. Your video is ready to watch or download.");
-  };
-
-  download.href = result.downloadUrl;
-  download.hidden = false;
-
-  if ($("shortTitle")) $("shortTitle").textContent = "Your Short is ready";
-
-  const details = $("clipDetails");
-
-  if (details) {
-    details.replaceChildren();
-
-    if (Array.isArray(result.clips)) {
-      result.clips.forEach((clip, index) => {
-        const line = document.createElement("p");
-        const start = Number(clip.start || 0).toFixed(1);
-        const end = Number(clip.end || 0).toFixed(1);
-
-        line.textContent =
-          `Clip ${index + 1}: ${start}s – ${end}s` +
-          (clip.reason ? ` — ${clip.reason}` : "");
-
-        details.appendChild(line);
-      });
-    }
-  }
-
-  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+function clearGeminiKey() {
+  state.geminiKey = "";
+  keyInput.value = "";
+  try {
+    localStorage.removeItem("reelnarrator_gemini_key");
+  } catch {}
+  setStatus(keyStatus, "Gemini key cleared from this device.");
 }
 
-/* CREATE VIDEO */
+function getSettings() {
+  return {
+    format: $("videoFormat").value,
+    targetDuration: Number($("targetDuration").value),
+    recapStyle: $("recapStyle").value,
+    voiceType: $("voiceType").value,
+    voiceAccent: $("voiceAccent").value,
+    voiceSpeed: $("voiceSpeed").value,
+    scriptInstructions: $("scriptInstructions").value.trim(),
+    includeCaptions: $("includeCaptions").checked,
+    captionPosition: $("captionPosition").value,
+    captionSize: $("captionSize").value,
+    captionColor: $("captionColor").value
+  };
+}
 
-async function createShort() {
-  if (activeRequest) {
-    setStatus("An upload is already running.");
+function showScript(narration, clips = []) {
+  state.script = narration || "";
+  state.scenes = clips || [];
+
+  $("fullNarration").value = state.script;
+  const sceneScriptList = $("sceneScriptList");
+  sceneScriptList.innerHTML = "";
+
+  state.scenes.forEach((clip, index) => {
+    const card = document.createElement("div");
+    card.className = "scene-script-card";
+
+    const heading = document.createElement("h3");
+    heading.textContent = `Scene ${index + 1} · ${formatTime(clip.start)}–${formatTime(clip.end)}`;
+
+    const description = document.createElement("p");
+    description.textContent = clip.description || clip.reason || "Selected scene";
+
+    card.append(heading, description);
+    sceneScriptList.appendChild(card);
+  });
+
+  show(scriptSection);
+  scriptSection.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function createRecap() {
+  setStatus(createStatus, "");
+  show(resultSection, false);
+  show(scriptSection, false);
+
+  if (!videoInput.files || !videoInput.files[0]) {
+    setStatus(createStatus, "Choose a video first.", true);
     return;
   }
 
-  const file = fileInput?.files?.[0];
-
-  if (!file) {
-    setStatus("Please choose a video first.");
+  if (!keyInput.value.trim() && !state.geminiKey) {
+    setStatus(createStatus, "Add your Gemini API key in API Settings first.", true);
+    $("settingsSection").scrollIntoView({ behavior: "smooth" });
     return;
   }
 
-  if (!file.type.startsWith("video/")) {
-    setStatus("That file does not appear to be a supported video.");
-    return;
-  }
-
-  if (file.size > CONFIG.maxFileSize) {
-    setStatus("This video is larger than the current 100 MB upload limit.");
-    return;
-  }
-
-  const mode = $("clipMode")?.value || "auto";
   let manualClips = [];
 
-  try {
-    if (mode === "manual") manualClips = getManualClips();
-  } catch (error) {
-    setStatus(error.message);
-    return;
+  if ($("sceneMode").value === "manual") {
+    try {
+      manualClips = collectManualScenes();
+    } catch (error) {
+      setStatus(createStatus, error.message, true);
+      return;
+    }
   }
 
-  pollToken++;
-  const token = pollToken;
-  currentJob = null;
+  const formData = new FormData();
+  formData.append("movie", videoInput.files[0]);
+  formData.append("mode", $("sceneMode").value);
+  formData.append("manualClips", JSON.stringify(manualClips));
+  formData.append("settings", JSON.stringify(getSettings()));
+  formData.append("geminiApiKey", keyInput.value.trim() || state.geminiKey);
 
-  setButton(true, "Uploading...");
-
-  if ($("shortPreview")) {
-    $("shortPreview").hidden = true;
-    $("shortPreview").classList.add("hidden");
-  }
-
-  showProgress();
-
-  updateProgress({
-    stage: "queued",
-    progress: 0,
-    message: "Preparing your video..."
-  });
+  createButton.disabled = true;
+  createButton.textContent = "Starting...";
+  setProgress(2, "Uploading video...");
 
   try {
-    const data = await uploadVideo(file, mode, manualClips);
-
-    currentJob = data.id;
-
-    setStatus(
-      mode === "manual"
-        ? "Upload confirmed. Your selected scenes are being processed."
-        : "Upload confirmed. AI is now analysing your video."
-    );
-
-    await checkJob(data.id, token);
-  } catch (error) {
-    setStatus(error.message || "Something went wrong.");
-
-    updateProgress({
-      stage: "error",
-      progress: 0,
-      message: error.message || "Processing failed."
+    const response = await fetch("/api/create-short", {
+      method: "POST",
+      body: formData
     });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "Could not start the recap.");
+    }
+
+    state.jobId = data.id;
+    await pollJob();
+  } catch (error) {
+    setStatus(createStatus, error.message || "Something went wrong.", true);
+    show(progressSection, false);
   } finally {
-    if (token === pollToken) setButton(false, "Create my Short");
+    createButton.disabled = false;
+    createButton.textContent = "Create recap";
   }
 }
 
-if (uploadBtn) {
-  uploadBtn.addEventListener("click", createShort);
-}
+async function pollJob() {
+  if (!state.jobId) return;
 
-/* COPY NARRATION */
+  try {
+    const response = await fetch(`/api/jobs/${state.jobId}`, {
+      cache: "no-store"
+    });
+    const job = await response.json();
 
-if ($("copyBtn")) {
-  $("copyBtn").addEventListener("click", async () => {
-    const script = $("script")?.value || "";
+    if (!response.ok) {
+      throw new Error(job.error || "Could not check job status.");
+    }
 
-    if (!script.trim()) {
-      setStatus("There is no narration text to copy.");
+    setProgress(job.progress, job.message);
+
+    if (job.stage === "error") {
+      throw new Error(job.error || job.message || "Recap failed.");
+    }
+
+    if (job.stage === "script_ready" || job.stage === "review") {
+      showScript(job.result?.narration || "", job.result?.clips || []);
+      setStatus(createStatus, "Review the narration below.");
       return;
     }
 
-    try {
-      await navigator.clipboard.writeText(script);
-      setStatus("Narration copied.");
-    } catch {
-      setStatus("Copy failed. Please copy the text manually.");
+    if (job.stage === "ready") {
+      const videoUrl = job.result?.videoUrl;
+      const downloadUrl = job.result?.downloadUrl;
+
+      if (videoUrl) $("resultVideo").src = videoUrl;
+      if (downloadUrl) $("downloadVideo").href = downloadUrl;
+
+      if (job.result?.narration) {
+        $("fullNarration").value = job.result.narration;
+      }
+
+      show(resultSection);
+      setStatus(createStatus, "Your recap is ready.");
+      resultSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
     }
+
+    setTimeout(pollJob, 1800);
+  } catch (error) {
+    setStatus(createStatus, error.message || "Job status check failed.", true);
+    show(progressSection, false);
+  }
+}
+
+async function generateFinalVideo() {
+  if (!state.jobId) {
+    setStatus(createStatus, "Create a recap first.", true);
+    return;
+  }
+
+  const narration = $("fullNarration").value.trim();
+
+  if (narration.length < 20) {
+    setStatus(createStatus, "Please review or enter a longer narration.", true);
+    return;
+  }
+
+  setStatus(createStatus, "Submitting reviewed narration...");
+
+  try {
+    const response = await fetch(`/api/jobs/${state.jobId}/finalize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        narration,
+        settings: getSettings(),
+        geminiApiKey: keyInput.value.trim() || state.geminiKey
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "Could not generate the final video.");
+    }
+
+    setStatus(createStatus, "Generating voice and video...");
+    pollJob();
+  } catch (error) {
+    setStatus(createStatus, error.message || "Final generation failed.", true);
+  }
+}
+
+async function regenerateScript() {
+  if (!state.jobId) {
+    setStatus(createStatus, "Create a recap first.", true);
+    return;
+  }
+
+  setStatus(createStatus, "Regenerating narration...");
+
+  try {
+    const response = await fetch(`/api/jobs/${state.jobId}/regenerate-script`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        settings: getSettings(),
+        geminiApiKey: keyInput.value.trim() || state.geminiKey
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "Could not regenerate narration.");
+    }
+
+    setStatus(createStatus, "New narration is ready to review.");
+    showScript(data.narration, data.clips || state.scenes);
+  } catch (error) {
+    setStatus(createStatus, error.message || "Script regeneration failed.", true);
+  }
+}
+
+function setupMenu() {
+  const toggle = $("menuToggle");
+  const menu = $("mainMenu");
+
+  toggle.addEventListener("click", () => {
+    const isOpen = !menu.classList.contains("hidden");
+    show(menu, !isOpen);
+    toggle.setAttribute("aria-expanded", String(!isOpen));
+  });
+
+  menu.querySelectorAll("a").forEach(link => {
+    link.addEventListener("click", () => {
+      show(menu, false);
+      toggle.setAttribute("aria-expanded", "false");
+    });
   });
 }
 
-selectSource("upload");
+function setupUI() {
+  setupMenu();
+
+  keyInput.value = getSavedKey();
+  state.geminiKey = keyInput.value;
+
+  if (state.geminiKey) {
+    setStatus(keyStatus, "Saved Gemini key loaded.");
+  }
+
+  $("toggleGeminiKey").addEventListener("click", () => {
+    const showKey = keyInput.type === "password";
+    keyInput.type = showKey ? "text" : "password";
+    $("toggleGeminiKey").textContent = showKey ? "Hide" : "Show";
+  });
+
+  $("saveGeminiKey").addEventListener("click", saveGeminiKey);
+  $("clearGeminiKey").addEventListener("click", clearGeminiKey);
+
+  videoInput.addEventListener("change", () => {
+    const file = videoInput.files?.[0];
+    $("selectedVideoName").textContent = file
+      ? `${file.name} · ${(file.size / (1024 * 1024)).toFixed(1)} MB`
+      : "";
+  });
+
+  $("sceneMode").addEventListener("change", () => {
+    const manual = $("sceneMode").value === "manual";
+    show(manualScenes, manual);
+
+    if (manual && sceneList.children.length === 0) {
+      addSceneRow();
+      addSceneRow();
+    }
+  });
+
+  $("addScene").addEventListener("click", () => {
+    if (sceneList.children.length >= 6) {
+      setStatus(createStatus, "You can add up to 6 scenes.", true);
+      return;
+    }
+    addSceneRow();
+  });
+
+  $("includeCaptions").addEventListener("change", () => {
+    show($("captionSettings"), $("includeCaptions").checked);
+  });
+
+  createButton.addEventListener("click", createRecap);
+  $("generateFinalVideo").addEventListener("click", generateFinalVideo);
+  $("regenerateScript").addEventListener("click", regenerateScript);
+
+  show($("captionSettings"), $("includeCaptions").checked);
+}
+
+document.addEventListener("DOMContentLoaded", setupUI);
