@@ -17,12 +17,12 @@ const JOB_TTL_MS = 60 * 60 * 1000;
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const GROQ_KEY = process.env.GROQ_API_KEY;
-const ELEVEN_KEY = process.env.ELEVENLABS_API_KEY;
-const ELEVEN_VOICE_ID = process.env.ELEVENLABS_VOICE_ID;
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
-const ELEVEN_MODEL = process.env.ELEVENLABS_MODEL || "eleven_multilingual_v2";
+const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+const GEMINI_TTS_MODEL =
+  process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts";
+const GEMINI_TTS_VOICE = process.env.GEMINI_TTS_VOICE || "Puck";
 
 const ai = GEMINI_KEY
   ? new GoogleGenAI({ apiKey: GEMINI_KEY })
@@ -47,10 +47,7 @@ const jobs = new Map();
 function updateJob(id, values) {
   const job = jobs.get(id);
   if (!job) return;
-
-  Object.assign(job, values, {
-    updatedAt: Date.now()
-  });
+  Object.assign(job, values, { updatedAt: Date.now() });
 }
 
 function sleep(ms) {
@@ -75,11 +72,9 @@ function runCommand(command, args) {
       if (code === 0) {
         resolve();
       } else {
-        reject(
-          new Error(
-            `Video processing failed: ${errorOutput.slice(-1500)}`
-          )
-        );
+        reject(new Error(
+          `Video processing failed: ${errorOutput.slice(-1500)}`
+        ));
       }
     });
   });
@@ -131,7 +126,9 @@ function validateClips(clips) {
       clip.end - clip.start > 25 ||
       !clip.description
     ) {
-      throw new Error("Gemini returned an invalid scene description or timestamp.");
+      throw new Error(
+        "Gemini returned an invalid scene description or timestamp."
+      );
     }
   }
 
@@ -163,14 +160,17 @@ async function generateContentWithRetry(request, jobId) {
 
       const retryable =
         ["429", "500", "502", "503", "504"].includes(status) ||
-        ["unavailable", "rate limit", "temporarily unavailable",
-         "timeout", "network"].some(term => message.includes(term));
+        [
+          "unavailable",
+          "rate limit",
+          "temporarily unavailable",
+          "timeout",
+          "network"
+        ].some(term => message.includes(term));
 
       if (!retryable || attempt === 4) {
         throw new Error(`Gemini analysis failed: ${error.message}`);
       }
-
-      const wait = waits[attempt - 1];
 
       updateJob(jobId, {
         stage: "analysing",
@@ -178,7 +178,7 @@ async function generateContentWithRetry(request, jobId) {
         message: `Gemini is busy. Retrying (${attempt + 1}/4)...`
       });
 
-      await sleep(wait);
+      await sleep(waits[attempt - 1]);
     }
   }
 
@@ -235,14 +235,13 @@ async function analyseVideo(filePath, mimeType, jobId) {
 Analyse the supplied video as a professional video editor.
 
 Select 2 to 6 useful scenes for a coherent movie recap.
-
 Return scenes in chronological order.
 
 For every scene provide:
 - start: start time in seconds
 - end: end time in seconds
 - reason: why the scene matters
-- description: a factual description of what visibly happens
+- description: factual description of what visibly happens
 
 Rules:
 - Never invent events.
@@ -254,15 +253,14 @@ Rules:
 - Do not select repeated or unrelated moments.
 - Keep the story understandable in chronological order.
 
-Return ONLY JSON in this structure:
-
+Return ONLY JSON:
 {
   "clips": [
     {
       "start": 10,
       "end": 18,
       "reason": "Why this scene matters",
-      "description": "What visibly happens in this scene"
+      "description": "What visibly happens"
     }
   ]
 }
@@ -314,7 +312,7 @@ async function writeNarration(clips, jobId) {
     {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${GROQ_KEY}`,
+        Authorization: `Bearer ${GROQ_KEY}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -333,14 +331,14 @@ Rules:
 - Explain what is happening, not just what viewers can see.
 - Use simple, conversational English.
 - Do not use character names.
-- Refer to people by their descriptions or roles.
+- Refer to people by descriptions or roles.
 - Do not invent events, motives, or outcomes.
 - Do not copy dialogue from the movie.
 - Do not add a generic opening hook.
 - Avoid robotic phrases and repetitive transitions.
-- Make it sound like a human explaining a movie to viewers.
-- Write approximately 85 to 115 words for this short video.
-- Return only the narration, without a title or notes.
+- Make it sound like a human explaining a movie.
+- Write approximately 85 to 115 words.
+- Return only narration, without a title or notes.
 `
           },
           {
@@ -357,7 +355,6 @@ Rules:
   if (!response.ok) {
     const details = await response.text();
     console.error("GROQ ERROR:", details);
-
     throw new Error(
       `Groq narration failed (${response.status}). Check your Groq model and API key.`
     );
@@ -377,26 +374,39 @@ async function generateVoice(narration, outputPath, jobId) {
   updateJob(jobId, {
     stage: "voicing",
     progress: 70,
-    message: "ElevenLabs is generating your narrator voice..."
+    message: "Gemini is generating your narrator voice..."
   });
 
   const response = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVEN_VOICE_ID)}`,
+    "https://generativelanguage.googleapis.com/v1beta/interactions",
     {
       method: "POST",
       headers: {
-        "xi-api-key": ELEVEN_KEY,
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg"
+        "x-goog-api-key": GEMINI_KEY,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        text: narration,
-        model_id: ELEVEN_MODEL,
-        voice_settings: {
-          stability: 0.45,
-          similarity_boost: 0.75,
-          style: 0.25,
-          use_speaker_boost: true
+        model: GEMINI_TTS_MODEL,
+        input: [{
+          type: "user_input",
+          content: [{
+            type: "text",
+            text: narration,
+            annotations: [{
+              type: "speech_metadata",
+              style: "Natural, conversational movie recap narrator. "
+                + "Engaging and expressive, clear pronunciation, "
+                + "medium pace, confident storytelling."
+            }]
+          }]
+        }],
+        response_format: {
+          type: "audio"
+        },
+        generation_config: {
+          speech_config: [
+            { voice: GEMINI_TTS_VOICE }
+          ]
         }
       })
     }
@@ -404,17 +414,41 @@ async function generateVoice(narration, outputPath, jobId) {
 
   if (!response.ok) {
     const details = await response.text();
-    console.error("ELEVENLABS ERROR:", details);
+    console.error("GEMINI TTS ERROR:", details);
 
     throw new Error(
-      `ElevenLabs voice generation failed (${response.status}). Check your API access, voice ID and usage limits.`
+      `Gemini voice generation failed (${response.status}). Check Gemini TTS access or quota.`
     );
   }
 
-  const audioBuffer = Buffer.from(await response.arrayBuffer());
+  const data = await response.json();
+
+  let audioBase64 = data?.output_audio?.data;
+
+  if (!audioBase64 && Array.isArray(data?.steps)) {
+    for (const step of data.steps) {
+      if (step?.type !== "model_output") continue;
+
+      for (const content of step.content || []) {
+        if (content?.type === "audio" && content?.data) {
+          audioBase64 = content.data;
+        }
+      }
+    }
+  }
+
+  if (!audioBase64) {
+    console.error(
+      "GEMINI TTS RESPONSE:",
+      JSON.stringify(data).slice(0, 2000)
+    );
+    throw new Error("Gemini did not return audio data.");
+  }
+
+  const audioBuffer = Buffer.from(audioBase64, "base64");
 
   if (audioBuffer.length < 1000) {
-    throw new Error("ElevenLabs returned an invalid audio file.");
+    throw new Error("Gemini returned an invalid audio file.");
   }
 
   await fs.promises.writeFile(outputPath, audioBuffer);
@@ -505,7 +539,7 @@ async function processVideo(jobId, buffer, mimeType) {
 
   const inputPath = path.join(directory, "original-video.mp4");
   const silentPath = path.join(directory, "silent-short.mp4");
-  const audioPath = path.join(directory, "narration.mp3");
+  const audioPath = path.join(directory, "narration.wav");
   const outputPath = path.join(directory, "finished-short.mp4");
 
   const job = jobs.get(jobId);
@@ -530,10 +564,6 @@ async function processVideo(jobId, buffer, mimeType) {
     });
 
     const narration = await writeNarration(analysis.clips, jobId);
-
-    if (!ELEVEN_KEY || !ELEVEN_VOICE_ID) {
-      throw new Error("ElevenLabs API key or Voice ID is missing in Render.");
-    }
 
     await generateVoice(narration, audioPath, jobId);
 
@@ -640,13 +670,6 @@ app.post("/api/create-short", (req, res) => {
       });
     }
 
-    if (!ELEVEN_KEY || !ELEVEN_VOICE_ID) {
-      return res.status(500).json({
-        ok: false,
-        error: "ELEVENLABS_API_KEY or ELEVENLABS_VOICE_ID is missing."
-      });
-    }
-
     if (!ffmpegPath) {
       return res.status(500).json({
         ok: false,
@@ -720,9 +743,10 @@ app.get("/api/health", (req, res) => {
     service: "ReelNarrator",
     editor: "AI-analysis-recap-writing-and-voice-rendering",
     geminiConfigured: Boolean(GEMINI_KEY),
+    geminiTtsConfigured: Boolean(GEMINI_KEY),
+    geminiTtsModel: GEMINI_TTS_MODEL,
+    geminiTtsVoice: GEMINI_TTS_VOICE,
     groqConfigured: Boolean(GROQ_KEY),
-    elevenLabsConfigured: Boolean(ELEVEN_KEY),
-    voiceConfigured: Boolean(ELEVEN_VOICE_ID),
     ffmpegConfigured: Boolean(ffmpegPath)
   });
 });
@@ -761,4 +785,3 @@ app.use((error, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`ReelNarrator running on port ${PORT}`);
 });
-      
