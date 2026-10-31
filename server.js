@@ -1,3 +1,4 @@
+
 import express from "express";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
@@ -42,6 +43,97 @@ function updateJob(id, values) {
   Object.assign(job, values, {
     updatedAt: new Date().toISOString()
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorDetails(error) {
+  const status =
+    error?.status ??
+    error?.code ??
+    error?.response?.status ??
+    error?.error?.code;
+
+  const message = [
+    error?.message,
+    error?.statusText,
+    error?.response?.statusText,
+    error?.error?.message
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return {
+    status: String(status ?? ""),
+    message: message.toLowerCase()
+  };
+}
+
+function isRetryableGeminiError(error) {
+  const { status, message } = getErrorDetails(error);
+
+  if (
+    ["429", "500", "502", "503", "504"].includes(status) ||
+    ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL", "DEADLINE_EXCEEDED"]
+      .some((code) => message.includes(code.toLowerCase()))
+  ) {
+    return true;
+  }
+
+  return (
+    message.includes("high demand") ||
+    message.includes("temporarily unavailable") ||
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("econnreset") ||
+    message.includes("etimedout") ||
+    message.includes("network")
+  );
+}
+
+async function generateContentWithRetry(request, jobId) {
+  const maxAttempts = 4;
+  const waitTimes = [2000, 5000, 10000];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await ai.models.generateContent(request);
+    } catch (error) {
+      const canRetry =
+        attempt < maxAttempts && isRetryableGeminiError(error);
+
+      if (!canRetry) {
+        if (isRetryableGeminiError(error)) {
+          throw new Error(
+            "Gemini is still unavailable after several attempts. Please try again later."
+          );
+        }
+
+        throw error;
+      }
+
+      const waitMs = waitTimes[attempt - 1] || 10000;
+      const waitSeconds = Math.ceil(waitMs / 1000);
+
+      console.warn(
+        `Gemini temporary error on attempt ${attempt}/${maxAttempts}. Retrying in ${waitSeconds}s.`
+      );
+
+      updateJob(jobId, {
+        stage: "analysing",
+        progress: 42,
+        message: `Gemini is busy. Retrying analysis (${attempt + 1} of ${maxAttempts}) in ${waitSeconds} seconds...`
+      });
+
+      await sleep(waitMs);
+    }
+  }
+
+  throw new Error("Gemini analysis could not be completed.");
 }
 
 function runCommand(command, args) {
@@ -178,7 +270,7 @@ async function analyseVideo(filePath, mimeType, jobId) {
       message: `Gemini is preparing the video. Status: ${state || "PROCESSING"}`
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await sleep(5000);
 
     file = await ai.files.get({ name: uploaded.name });
   }
@@ -223,23 +315,26 @@ Return ONLY valid JSON in this exact structure:
     message: "AI is analysing the scenes and choosing clips..."
   });
 
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            fileData: {
-              fileUri: file.uri,
-              mimeType: file.mimeType || mimeType
-            }
-          },
-          { text: prompt }
-        ]
-      }
-    ]
-  });
+  const response = await generateContentWithRetry(
+    {
+      model: MODEL,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              fileData: {
+                fileUri: file.uri,
+                mimeType: file.mimeType || mimeType
+              }
+            },
+            { text: prompt }
+          ]
+        }
+      ]
+    },
+    jobId
+  );
 
   const result = parseAIResponse(response);
   const clips = validateClips(result.clips);
@@ -521,4 +616,4 @@ app.use((error, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`ReelNarrator running on port ${PORT}`);
 });
-                     
+      
