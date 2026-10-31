@@ -221,6 +221,72 @@ function showScript(narration, clips = []) {
   scriptSection.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+/* Upload with real progress reporting */
+function uploadRecap(formData) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.open("POST", "/api/create-short");
+    xhr.timeout = 15 * 60 * 1000;
+
+    xhr.upload.addEventListener("progress", event => {
+      if (!event.lengthComputable || event.total <= 0) return;
+
+      const uploaded = Math.round((event.loaded / event.total) * 100);
+
+      // Reserve the rest of the progress bar for server-side processing.
+      const displayProgress = 2 + uploaded * 0.18;
+
+      setProgress(
+        displayProgress,
+        uploaded >= 100
+          ? "Upload complete. Waiting for the server..."
+          : `Uploading video... ${uploaded}%`
+      );
+    });
+
+    xhr.addEventListener("load", () => {
+      let data;
+
+      try {
+        data = JSON.parse(xhr.responseText || "{}");
+      } catch {
+        reject(new Error(
+          `Server returned an invalid response (HTTP ${xhr.status}).`
+        ));
+        return;
+      }
+
+      if (xhr.status < 200 || xhr.status >= 300 || !data.ok) {
+        reject(new Error(
+          data.error || `Could not start the recap (HTTP ${xhr.status}).`
+        ));
+        return;
+      }
+
+      resolve(data);
+    });
+
+    xhr.addEventListener("error", () => {
+      reject(new Error(
+        "Network error while uploading. Check your connection and try again."
+      ));
+    });
+
+    xhr.addEventListener("timeout", () => {
+      reject(new Error(
+        "Upload timed out. Try a smaller video or a stronger connection."
+      ));
+    });
+
+    xhr.addEventListener("abort", () => {
+      reject(new Error("Upload was cancelled."));
+    });
+
+    xhr.send(formData);
+  });
+}
+
 async function createRecap() {
   setStatus(createStatus, "");
   show(resultSection, false);
@@ -256,22 +322,17 @@ async function createRecap() {
   formData.append("geminiApiKey", keyInput.value.trim() || state.geminiKey);
 
   createButton.disabled = true;
-  createButton.textContent = "Starting...";
-  setProgress(2, "Uploading video...");
+  createButton.textContent = "Uploading...";
+  setProgress(2, "Preparing video upload...");
 
   try {
-    const response = await fetch("/api/create-short", {
-      method: "POST",
-      body: formData
-    });
-
-    const data = await response.json();
-
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || "Could not start the recap.");
-    }
+    const data = await uploadRecap(formData);
 
     state.jobId = data.id;
+
+    setProgress(20, "Upload complete. Starting video analysis...");
+    createButton.textContent = "Processing...";
+
     await pollJob();
   } catch (error) {
     setStatus(createStatus, error.message || "Something went wrong.", true);
