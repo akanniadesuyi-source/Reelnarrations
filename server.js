@@ -1,4 +1,3 @@
-
 import express from "express";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
@@ -14,10 +13,10 @@ const PORT = process.env.PORT || 3000;
 
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 100);
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+const JOB_TTL_MS = 60 * 60 * 1000;
 
 const API_KEY = process.env.GEMINI_API_KEY;
 const MODEL = "gemini-3.8-flash";
-
 const ai = API_KEY ? new GoogleGenAI({ apiKey: API_KEY }) : null;
 
 app.use(express.json());
@@ -61,9 +60,7 @@ function getErrorDetails(error) {
     error?.statusText,
     error?.response?.statusText,
     error?.error?.message
-  ]
-    .filter(Boolean)
-    .join(" ");
+  ].filter(Boolean).join(" ");
 
   return {
     status: String(status ?? ""),
@@ -112,7 +109,6 @@ async function generateContentWithRetry(request, jobId) {
             "Gemini is still unavailable after several attempts. Please try again later."
           );
         }
-
         throw error;
       }
 
@@ -155,9 +151,7 @@ function runCommand(command, args) {
         resolve();
       } else {
         reject(
-          new Error(
-            `Video processing failed. ${errorOutput.slice(-1200)}`
-          )
+          new Error(`Video processing failed. ${errorOutput.slice(-1200)}`)
         );
       }
     });
@@ -271,7 +265,6 @@ async function analyseVideo(filePath, mimeType, jobId) {
     });
 
     await sleep(5000);
-
     file = await ai.files.get({ name: uploaded.name });
   }
 
@@ -337,9 +330,7 @@ Return ONLY valid JSON in this exact structure:
   );
 
   const result = parseAIResponse(response);
-  const clips = validateClips(result.clips);
-
-  return { clips };
+  return { clips: validateClips(result.clips) };
 }
 
 async function renderShort(inputPath, clips, outputPath, jobId) {
@@ -386,7 +377,6 @@ async function renderShort(inputPath, clips, outputPath, jobId) {
   });
 
   const listPath = path.join(directory, "clips.txt");
-
   const listContents = clipFiles
     .map((file) => `file '${file.replace(/'/g, "'\\''")}'`)
     .join("\n");
@@ -413,7 +403,7 @@ async function processVideo(jobId, buffer, mimeType) {
     path.join(os.tmpdir(), "reelnarrator-")
   );
 
-  const inputPath = path.join(directory, "original-video");
+  const inputPath = path.join(directory, "original-video.mp4");
   const outputPath = path.join(directory, "finished-short.mp4");
 
   const job = jobs.get(jobId);
@@ -444,16 +434,28 @@ async function processVideo(jobId, buffer, mimeType) {
 
     await renderShort(inputPath, analysis.clips, outputPath, jobId);
 
+    const stats = await fs.promises.stat(outputPath);
+    if (!stats.isFile() || stats.size < 1000) {
+      throw new Error("The finished video file is invalid.");
+    }
+
     updateJob(jobId, {
       stage: "finalising",
       progress: 95,
-      message: "Checking the finished video..."
+      message: "Verifying the finished video..."
     });
 
-    const stats = await fs.promises.stat(outputPath);
+    // Confirm the output can be opened and read before reporting ready.
+    const verifyPath = path.join(directory, "verify-output.mp4");
+    await runCommand(ffmpegPath, [
+      "-v", "error",
+      "-i", outputPath,
+      "-f", "null",
+      "-"
+    ]);
 
-    if (stats.size === 0) {
-      throw new Error("The finished video is empty.");
+    if (!fs.existsSync(outputPath)) {
+      throw new Error("The finished video disappeared during verification.");
     }
 
     updateJob(jobId, {
@@ -461,13 +463,12 @@ async function processVideo(jobId, buffer, mimeType) {
       progress: 100,
       message: "Your video is ready to preview and download.",
       result: {
-        videoUrl: `/api/download/${jobId}`,
+        videoUrl: `/api/video/${jobId}`,
         downloadUrl: `/api/download/${jobId}`,
         clips: analysis.clips,
         size: stats.size
       }
     });
-
   } catch (error) {
     console.error(`Job ${jobId} failed:`, error);
 
@@ -480,13 +481,52 @@ async function processVideo(jobId, buffer, mimeType) {
   }
 }
 
+function getReadyVideo(req, res, download = false) {
+  const job = jobs.get(req.params.id);
+
+  if (!job || job.stage !== "ready" || !job.directory) {
+    return res.status(404).json({
+      error: "This finished video is no longer available. Please create it again."
+    });
+  }
+
+  const outputPath = path.join(job.directory, "finished-short.mp4");
+
+  if (!fs.existsSync(outputPath)) {
+    return res.status(404).json({
+      error: "The video file has expired or is missing. Please create it again."
+    });
+  }
+
+  const stat = fs.statSync(outputPath);
+  if (!stat.isFile() || stat.size < 1000) {
+    return res.status(404).json({
+      error: "The finished video file is invalid. Please create it again."
+    });
+  }
+
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "no-store");
+
+  if (download) {
+    return res.download(outputPath, "reelnarrator-short.mp4");
+  }
+
+  // Express sendFile supports byte-range requests needed by HTML video players.
+  return res.sendFile(outputPath, {
+    headers: {
+      "Content-Type": "video/mp4",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "no-store"
+    }
+  });
+}
+
 app.post("/api/create-short", (req, res) => {
   upload.single("movie")(req, res, (error) => {
     if (error) {
-      return res.status(400).json({
-        ok: false,
-        error: error.message
-      });
+      return res.status(400).json({ ok: false, error: error.message });
     }
 
     if (!ai) {
@@ -519,10 +559,11 @@ app.post("/api/create-short", (req, res) => {
       stage: "queued",
       progress: 0,
       message: "Video received. Preparing your job...",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
       result: null,
-      error: null
+      error: null,
+      directory: null
     });
 
     res.status(202).json({
@@ -533,7 +574,6 @@ app.post("/api/create-short", (req, res) => {
 
     processVideo(id, buffer, mimeType).catch((err) => {
       console.error("Unexpected processing error:", err);
-
       updateJob(id, {
         stage: "error",
         progress: 0,
@@ -549,12 +589,11 @@ app.get("/api/jobs/:id", (req, res) => {
 
   if (!job) {
     return res.status(404).json({
-      error: "Job not found. It may have expired or the server may have restarted."
+      error: "Job not found. The server may have restarted."
     });
   }
 
   res.set("Cache-Control", "no-store");
-
   res.json({
     id: job.id,
     stage: job.stage,
@@ -565,24 +604,12 @@ app.get("/api/jobs/:id", (req, res) => {
   });
 });
 
+app.get("/api/video/:id", (req, res) => {
+  return getReadyVideo(req, res, false);
+});
+
 app.get("/api/download/:id", (req, res) => {
-  const job = jobs.get(req.params.id);
-
-  if (!job || job.stage !== "ready" || !job.directory) {
-    return res.status(404).json({
-      error: "The finished video is not available."
-    });
-  }
-
-  const outputPath = path.join(job.directory, "finished-short.mp4");
-
-  if (!fs.existsSync(outputPath)) {
-    return res.status(404).json({
-      error: "The video file could not be found."
-    });
-  }
-
-  res.download(outputPath, "reelnarrator-short.mp4");
+  return getReadyVideo(req, res, true);
 });
 
 app.post("/api/voice", async (req, res) => {
@@ -602,9 +629,29 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// Periodically remove expired jobs and their temporary files.
+setInterval(async () => {
+  const now = Date.now();
+
+  for (const [id, job] of jobs.entries()) {
+    const updatedAt = Number(job.updatedAt || job.createdAt || now);
+
+    if (now - updatedAt < JOB_TTL_MS) continue;
+    if (job.stage !== "ready" && job.stage !== "error") continue;
+
+    jobs.delete(id);
+
+    if (job.directory) {
+      await fs.promises.rm(job.directory, {
+        recursive: true,
+        force: true
+      }).catch(() => {});
+    }
+  }
+}, 10 * 60 * 1000).unref();
+
 app.use((error, req, res, next) => {
   console.error(error);
-
   if (res.headersSent) return next(error);
 
   res.status(500).json({
@@ -616,4 +663,4 @@ app.use((error, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`ReelNarrator running on port ${PORT}`);
 });
-      
+    
