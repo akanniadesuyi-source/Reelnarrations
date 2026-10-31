@@ -1,3 +1,4 @@
+
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -5,7 +6,9 @@ const $ = (id) => document.getElementById(id);
 const CONFIG = {
   maxFileSize: 100 * 1024 * 1024,
   uploadTimeout: 5 * 60 * 1000,
-  pollInterval: 2500
+  pollInterval: 2500,
+  minClips: 2,
+  maxClips: 6
 };
 
 let currentJob = null;
@@ -87,6 +90,203 @@ function updateProgress(job) {
   });
 }
 
+/* AUTO / MANUAL CONTROLS */
+
+function createModeControls() {
+  if (!uploadBtn || $("modeControls")) return;
+
+  const container = document.createElement("section");
+  container.id = "modeControls";
+  container.style.cssText = `
+    margin: 18px 0;
+    padding: 16px;
+    border: 1px solid rgba(128,128,128,.3);
+    border-radius: 12px;
+  `;
+
+  const heading = document.createElement("h3");
+  heading.textContent = "Choose clip selection mode";
+
+  const description = document.createElement("p");
+  description.textContent =
+    "Auto lets AI select scenes. Manual lets you choose the timestamps yourself.";
+
+  const select = document.createElement("select");
+  select.id = "clipMode";
+  select.style.cssText = `
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0 14px;
+    border-radius: 8px;
+  `;
+
+  const autoOption = document.createElement("option");
+  autoOption.value = "auto";
+  autoOption.textContent = "Auto — AI selects the best scenes";
+
+  const manualOption = document.createElement("option");
+  manualOption.value = "manual";
+  manualOption.textContent = "Manual — I choose the scenes";
+
+  select.append(autoOption, manualOption);
+
+  const manualPanel = document.createElement("div");
+  manualPanel.id = "manualPanel";
+  manualPanel.hidden = true;
+
+  const manualHeading = document.createElement("h4");
+  manualHeading.textContent = "Your selected scenes";
+
+  const manualInfo = document.createElement("p");
+  manualInfo.textContent =
+    "Enter each scene's start and end time in seconds. Add between 2 and 6 scenes.";
+
+  const clipList = document.createElement("div");
+  clipList.id = "manualClipList";
+
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.id = "addManualClip";
+  addButton.textContent = "+ Add another scene";
+  addButton.style.cssText = "margin: 10px 0; padding: 10px;";
+
+  manualPanel.append(manualHeading, manualInfo, clipList, addButton);
+  container.append(heading, description, select, manualPanel);
+
+  const buttonParent = uploadBtn.parentElement;
+  buttonParent.insertBefore(container, uploadBtn);
+
+  function addClip() {
+    const existing = clipList.querySelectorAll(".manual-clip");
+
+    if (existing.length >= CONFIG.maxClips) {
+      setStatus("You can select a maximum of 6 scenes.");
+      return;
+    }
+
+    const number = existing.length + 1;
+
+    const row = document.createElement("div");
+    row.className = "manual-clip";
+    row.style.cssText = `
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+      padding: 12px;
+      border: 1px solid rgba(128,128,128,.25);
+      border-radius: 8px;
+    `;
+
+    const title = document.createElement("strong");
+    title.textContent = `Scene ${number}`;
+    title.style.gridColumn = "1 / -1";
+
+    const startLabel = document.createElement("label");
+    startLabel.textContent = "Start time (seconds)";
+
+    const start = document.createElement("input");
+    start.type = "number";
+    start.min = "0";
+    start.step = "0.1";
+    start.placeholder = "e.g. 12";
+    start.className = "manual-start";
+    start.style.cssText = "width: 100%; padding: 10px;";
+
+    startLabel.appendChild(start);
+
+    const endLabel = document.createElement("label");
+    endLabel.textContent = "End time (seconds)";
+
+    const end = document.createElement("input");
+    end.type = "number";
+    end.min = "0";
+    end.step = "0.1";
+    end.placeholder = "e.g. 25";
+    end.className = "manual-end";
+    end.style.cssText = "width: 100%; padding: 10px;";
+
+    endLabel.appendChild(end);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove scene";
+    remove.style.cssText =
+      "grid-column: 1 / -1; padding: 8px;";
+
+    remove.addEventListener("click", () => {
+      if (clipList.children.length <= CONFIG.minClips) {
+        setStatus("Manual mode needs at least 2 scenes.");
+        return;
+      }
+
+      row.remove();
+      renumberClips();
+    });
+
+    row.append(title, startLabel, endLabel, remove);
+    clipList.appendChild(row);
+    renumberClips();
+  }
+
+  function renumberClips() {
+    clipList.querySelectorAll(".manual-clip").forEach((row, index) => {
+      const title = row.querySelector("strong");
+      if (title) title.textContent = `Scene ${index + 1}`;
+    });
+  }
+
+  addButton.addEventListener("click", addClip);
+
+  select.addEventListener("change", () => {
+    const manual = select.value === "manual";
+    manualPanel.hidden = !manual;
+
+    setStatus(
+      manual
+        ? "Manual mode selected. Enter your scene timestamps."
+        : "Auto mode selected. AI will choose the scenes."
+    );
+  });
+
+  addClip();
+  addClip();
+}
+
+function getManualClips() {
+  const rows = document.querySelectorAll(".manual-clip");
+
+  if (rows.length < CONFIG.minClips || rows.length > CONFIG.maxClips) {
+    throw new Error("Please select between 2 and 6 scenes.");
+  }
+
+  const clips = [];
+
+  rows.forEach((row, index) => {
+    const start = Number(row.querySelector(".manual-start")?.value);
+    const end = Number(row.querySelector(".manual-end")?.value);
+
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      start < 0 ||
+      end <= start
+    ) {
+      throw new Error(
+        `Please enter valid start and end times for Scene ${index + 1}.`
+      );
+    }
+
+    clips.push({
+      start,
+      end,
+      description: `Selected scene ${index + 1}`
+    });
+  });
+
+  return clips;
+}
+
 function selectSource(source) {
   document.querySelectorAll(".tab[data-source]").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.source === source);
@@ -131,9 +331,16 @@ if (fileInput) {
   });
 }
 
-function uploadVideo(file) {
+function uploadVideo(file, mode, manualClips) {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
+
+    formData.append("mode", mode);
+
+    if (mode === "manual") {
+      formData.append("manualClips", JSON.stringify(manualClips));
+    }
+
     formData.append("movie", file);
 
     const xhr = new XMLHttpRequest();
@@ -351,6 +558,18 @@ async function createShort() {
     return;
   }
 
+  const mode = $("clipMode")?.value || "auto";
+  let manualClips = [];
+
+  try {
+    if (mode === "manual") {
+      manualClips = getManualClips();
+    }
+  } catch (error) {
+    setStatus(error.message);
+    return;
+  }
+
   pollToken++;
   const token = pollToken;
   currentJob = null;
@@ -371,10 +590,15 @@ async function createShort() {
   });
 
   try {
-    const data = await uploadVideo(file);
+    const data = await uploadVideo(file, mode, manualClips);
 
     currentJob = data.id;
-    setStatus("Upload confirmed. AI is now analysing your video.");
+
+    setStatus(
+      mode === "manual"
+        ? "Upload confirmed. Your selected scenes are being processed."
+        : "Upload confirmed. AI is now analysing your video."
+    );
 
     await checkJob(data.id, token);
   } catch (error) {
@@ -414,5 +638,5 @@ if ($("copyBtn")) {
   });
 }
 
+createModeControls();
 selectSource("upload");
-      
