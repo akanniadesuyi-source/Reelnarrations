@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101014">
   <title>ReelNarrator — AI Video Studio</title>
-  <link rel="stylesheet" href="/style.css?v=3">
+  <link rel="stylesheet" href="/style.css?v=4">
 </head>
 <body>
 
@@ -16,13 +16,10 @@
 </header>
 
 <main>
-
   <section class="hero">
     <p class="eyebrow">YOUR CONTENT. YOUR CONTROL.</p>
     <h1>Create videos that<br><span>keep people watching.</span></h1>
-    <p class="sub">
-      Turn long videos into engaging content with AI-powered editing.
-    </p>
+    <p class="sub">Turn long videos into engaging content with AI-powered editing.</p>
   </section>
 
   <section class="panel">
@@ -30,12 +27,8 @@
     <h2>Choose your video</h2>
 
     <div class="tabs">
-      <button class="tab active" data-source="upload" type="button">
-        Upload video
-      </button>
-      <button class="tab" data-source="youtube" type="button">
-        YouTube link
-      </button>
+      <button class="tab active" data-source="upload" type="button">Upload video</button>
+      <button class="tab" data-source="youtube" type="button">YouTube link</button>
     </div>
 
     <div id="uploadPane" class="pane">
@@ -45,21 +38,14 @@
         <span>Tap to select your video</span>
         <small id="fileName">No video selected</small>
       </label>
-
       <input id="movieFile" type="file" accept="video/*" hidden>
     </div>
 
     <div id="youtubePane" class="pane hidden">
       <label for="youtubeUrl">Paste your YouTube video URL</label>
-      <input
-        id="youtubeUrl"
-        class="field"
-        type="url"
-        placeholder="https://www.youtube.com/watch?v=..."
-      >
-      <p class="hint">
-        YouTube link processing is not connected yet. Upload a video you have permission to edit.
-      </p>
+      <input id="youtubeUrl" class="field" type="url"
+        placeholder="https://www.youtube.com/watch?v=...">
+      <p class="hint">YouTube link processing is not connected yet. Upload a video you have permission to edit.</p>
     </div>
   </section>
 
@@ -74,14 +60,12 @@
         <strong>9:16</strong>
         <small>TikTok / Shorts / Reels</small>
       </label>
-
       <label class="formatOption">
         <input type="radio" name="format" value="16:9">
         <span class="formatPreview landscape"></span>
         <strong>16:9</strong>
         <small>YouTube landscape</small>
       </label>
-
       <label class="formatOption">
         <input type="radio" name="format" value="1:1">
         <span class="formatPreview square"></span>
@@ -93,14 +77,72 @@
 
   <section class="panel">
     <p class="eyebrow">03 — CLIP SELECTION</p>
-    <h2>Choose how scenes are selected</h2>
-    <p class="hint">
-      Auto lets AI choose scenes. Manual lets you enter the timestamps yourself.
-    </p>
+    <h2>Choose your selection mode</h2>
+    <p class="hint">Choose whether AI selects the scenes or you choose them yourself.</p>
+
+    <label for="clipMode">Selection mode</label>
+    <select id="clipMode" class="field">
+      <option value="auto">Auto — AI selects the scenes</option>
+      <option value="manual">Manual — I choose the scenes</option>
+    </select>
+
+    <div id="manualPanel" hidden>
+      <h3>Choose your scenes</h3>
+      <p class="hint">Enter each scene's start and end time in seconds. Add between 2 and 6 scenes.</p>
+
+      <div id="manualClipList">
+        <div class="manual-clip">
+          <strong class="scene-title">Scene 1</strong>
+          <label>Start time (seconds)
+            <input class="field manual-start" type="number" min="0" step="0.1" placeholder="e.g. 12">
+          </label>
+          <label>End time (seconds)
+            <input class="field manual-end" type="number" min="0" step="0.1" placeholder="e.g. 25">
+          </label>
+          <button class="secondary remove-scene" type="button">Remove scene</button>
+        </div>
+
+        <div class="manual-clip">
+          <strong class="scene-title">Scene 2</strong>
+          <label>Start time (seconds)
+            <input class="field manual-start" type="number" min="0" step="0.1" placeholder="e.g. 30">
+          </label>
+          <label>End time (seconds)
+            <input class="field manual-end" type="number" min="0" step="0.1" placeholder="e.g. 45">
+          </label>
+          <button class="secondary remove-scene" type="button">Remove scene</button>
+        </div>
+      </div>
+
+      <button id="addManualClip" class="secondary" type="button">+ Add another scene</button>
+    </div>
   </section>
 
   <section class="panel">
-    <p class="eyebrow">04 — CAPTIONS</p>
+    <p class="eyebrow">04 — VIDEO LENGTH & STYLE</p>
+    <h2>Editing preferences</h2>
+
+    <label for="videoLength">Target video length</label>
+    <select id="videoLength" class="field">
+      <option value="30">30 seconds</option>
+      <option value="45" selected>45 seconds</option>
+      <option value="60">60 seconds</option>
+      <option value="90">90 seconds</option>
+      <option value="120">2 minutes</option>
+    </select>
+
+    <label for="editingStyle">Editing style</label>
+    <select id="editingStyle" class="field">
+      <option value="storytelling">Storytelling</option>
+      <option value="cinematic">Cinematic</option>
+      <option value="fast-paced">Fast-paced</option>
+      <option value="dramatic">Dramatic</option>
+      <option value="documentary">Documentary</option>
+    </select>
+  </section>
+
+  <section class="panel">
+    <p class="eyebrow">05 — CAPTIONS</p>
     <h2>Subtitle settings</h2>
 
     <label class="checkOption">
@@ -125,7 +167,7 @@
   </section>
 
   <section class="panel">
-    <p class="eyebrow">05 — HOOK & TITLES</p>
+    <p class="eyebrow">06 — HOOK & TITLES</p>
     <h2>Make people stop scrolling</h2>
 
     <label class="checkOption">
@@ -134,28 +176,23 @@
     </label>
 
     <label for="customHook">Your own hook (optional)</label>
-    <input id="customHook" class="field" type="text"
-      placeholder="Enter your opening line...">
+    <input id="customHook" class="field" type="text" placeholder="Enter your opening line...">
 
     <label for="tiktokTitle">TikTok title / caption</label>
-    <textarea id="tiktokTitle" class="script" rows="3"
-      placeholder="AI-generated TikTok caption will appear here..."></textarea>
+    <textarea id="tiktokTitle" class="script" rows="3" placeholder="TikTok caption..."></textarea>
 
     <label for="youtubeTitle">YouTube Shorts title</label>
-    <input id="youtubeTitle" class="field" type="text"
-      placeholder="Enter or generate your YouTube title...">
+    <input id="youtubeTitle" class="field" type="text" placeholder="YouTube title...">
 
     <label for="youtubeDescription">YouTube description</label>
-    <textarea id="youtubeDescription" class="script" rows="3"
-      placeholder="Your YouTube description..."></textarea>
+    <textarea id="youtubeDescription" class="script" rows="3" placeholder="YouTube description..."></textarea>
 
     <label for="hashtags">Hashtags</label>
-    <input id="hashtags" class="field" type="text"
-      placeholder="#Shorts #TikTok">
+    <input id="hashtags" class="field" type="text" placeholder="#Shorts #TikTok">
   </section>
 
   <section class="panel">
-    <p class="eyebrow">06 — AUDIO</p>
+    <p class="eyebrow">07 — AUDIO</p>
     <h2>Narration & background sound</h2>
 
     <label class="checkOption">
@@ -164,8 +201,7 @@
     </label>
 
     <label for="script">Narration script</label>
-    <textarea id="script" class="script" rows="5"
-      placeholder="Write your narration or let AI generate it..."></textarea>
+    <textarea id="script" class="script" rows="5" placeholder="Write your narration..."></textarea>
 
     <label class="checkOption">
       <input type="checkbox" id="musicEnabled">
@@ -183,17 +219,11 @@
   </section>
 
   <section class="panel">
-    <p class="eyebrow">07 — CREATE YOUR VIDEO</p>
+    <p class="eyebrow">08 — CREATE YOUR VIDEO</p>
     <h2>Ready to edit?</h2>
+    <p class="hint">Your selected settings will guide the editing process.</p>
 
-    <p class="hint">
-      Your selected settings will guide the editing process.
-    </p>
-
-    <button id="uploadBtn" class="primary" type="button">
-      Create my Short
-    </button>
-
+    <button id="uploadBtn" class="primary" type="button">Create my Short</button>
     <p id="status" class="status" aria-live="polite"></p>
   </section>
 
@@ -213,48 +243,25 @@
   <section id="shortPreview" class="panel hidden">
     <p class="eyebrow">YOUR FINISHED VIDEO</p>
     <h2 id="shortTitle">Your Short</h2>
-
-    <video id="shortVideo" controls playsinline
-      style="width:100%;max-height:600px;background:#000;border-radius:12px"></video>
-
+    <video id="shortVideo" controls playsinline style="width:100%;max-height:600px;background:#000;border-radius:12px"></video>
     <div id="clipDetails"></div>
-
-    <a id="shortDownload" class="primary"
-      style="display:block;text-align:center;text-decoration:none;margin-top:18px"
-      download="reelnarrator-video.mp4">
-      Download finished video
-    </a>
+    <a id="shortDownload" class="primary" style="display:block;text-align:center;text-decoration:none;margin-top:18px" download="reelnarrator-video.mp4">Download finished video</a>
   </section>
 
   <section class="panel">
     <p class="eyebrow">EXTRA TOOLS</p>
     <h2>Voice generation</h2>
-
-    <button id="copyBtn" class="secondary" type="button">
-      Copy narration
-    </button>
-
-    <button id="voiceBtn" class="primary small" type="button">
-      Generate voice
-    </button>
-
+    <button id="copyBtn" class="secondary" type="button">Copy narration</button>
+    <button id="voiceBtn" class="primary small" type="button">Generate voice</button>
     <audio id="audio" controls class="audio hidden"></audio>
-
-    <a id="downloadAudio" class="download hidden"
-      download="reelnarrator.mp3">
-      Download narration audio
-    </a>
+    <a id="downloadAudio" class="download hidden" download="reelnarrator.mp3">Download narration audio</a>
   </section>
 
   <footer>
-    <p>
-      ReelNarrator AI Video Studio.
-      Only upload videos you own or have permission to edit.
-    </p>
+    <p>ReelNarrator AI Video Studio. Only upload videos you own or have permission to edit.</p>
   </footer>
-
 </main>
 
-<script src="/app.js?v=3"></script>
+<script src="/app.js?v=4"></script>
 </body>
 </html>
