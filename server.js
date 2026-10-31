@@ -823,4 +823,15 @@ setInterval(async () => {
 
     jobs.delete(id);
 
-    if 
+      if (job.directory) {
+      await fs.promises.rm(job.directory, {
+        recursive: true,
+        force: true
+      });
+    }
+  }
+}, 5 * 60 * 1000);
+
+app.listen(PORT, () => {
+  console.log(`ReelNarrator running on port ${PORT}`);
+});
