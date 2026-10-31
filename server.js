@@ -1,3 +1,4 @@
+
 import express from "express";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
@@ -810,6 +811,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// Remove old completed jobs and their temporary files.
 setInterval(async () => {
   const now = Date.now();
 
@@ -821,5 +823,4 @@ setInterval(async () => {
 
     jobs.delete(id);
 
-    if (job.directory) {
-      await fs.promises.rm(job.director
+    if 
