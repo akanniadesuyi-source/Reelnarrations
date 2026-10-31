@@ -355,23 +355,19 @@ Rules:
 
   let clips = validateClips(parsed.clips, duration);
 
-  if (manual) {
+    if (manual) {
     clips = manualClips.map((range, index) => ({
       start: range.start,
       end: range.end,
       description:
         clips[index]?.description ||
         `Visible action from ${range.start} to ${range.end} seconds`,
-      reason: "Manually selected scene"
+      reason: "Manually selected scene",
     }));
   }
 
   return clips;
-      });
-  }
-
-  return clips;
-      }
+}
 async function generateNarration(clips, settings) {
   const groq = getGroq();
 
