@@ -1,837 +1,731 @@
-
 import express from "express";
 import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
-import ffmpegPath from "ffmpeg-static";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import Groq from "groq-sdk";
+import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
+import os from "os";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
+const PUBLIC_DIR = path.join(process.cwd(), "public");
+const TEMP_DIR = path.join(os.tmpdir(), "reelnarrations");
+const JOBS_DIR = path.join(TEMP_DIR, "jobs");
+const UPLOADS_DIR = path.join(TEMP_DIR, "uploads");
 
-const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 100);
-const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
-const JOB_TTL_MS = 60 * 60 * 1000;
+for (const dir of [TEMP_DIR, JOBS_DIR, UPLOADS_DIR]) {
+  fs.mkdirSync(dir, { recursive: true });
+}
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
-const GROQ_KEY = process.env.GROQ_API_KEY;
-
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
-const GEMINI_TTS_MODEL =
-  process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts";
-const GEMINI_TTS_VOICE = process.env.GEMINI_TTS_VOICE || "Puck";
-
-const ai = GEMINI_KEY
-  ? new GoogleGenAI({ apiKey: GEMINI_KEY })
-  : null;
-
-app.use(express.json());
-app.use(express.static("public"));
+app.use(express.json({ limit: "20mb" }));
+app.use(express.static(PUBLIC_DIR));
 
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES },
-  fileFilter(req, file, callback) {
-    if (!file.mimetype.startsWith("video/")) {
-      return callback(new Error("Please upload a video file."));
-    }
-    callback(null, true);
-  }
+  dest: UPLOADS_DIR,
+  limits: { fileSize: 500 * 1024 * 1024 },
 });
 
 const jobs = new Map();
 
-function updateJob(id, values) {
-  const job = jobs.get(id);
-  if (!job) return;
-  Object.assign(job, values, { updatedAt: Date.now() });
+function parseJsonField(value, fallback) {
+  if (value == null || value === "") return fallback;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function getSettings(value) {
+  const raw = parseJsonField(value, {});
+  return {
+    format: ["9:16", "16:9", "1:1"].includes(raw.format)
+      ? raw.format
+      : "9:16",
+    targetDuration: Math.min(
+      180,
+      Math.max(15, Number(raw.targetDuration) || 60)
+    ),
+    recapStyle: String(raw.recapStyle || "Engaging movie recap").slice(0, 500),
+    voiceType: String(raw.voiceType || "Kore").slice(0, 80),
+    voiceAccent: String(raw.voiceAccent || "English").slice(0, 80),
+    voiceSpeed: Math.min(1.5, Math.max(0.7, Number(raw.voiceSpeed) || 1)),
+    scriptInstructions: String(raw.scriptInstructions || "").slice(0, 3000),
+    includeCaptions: raw.includeCaptions !== false,
+    captionPosition: String(raw.captionPosition || "bottom").slice(0, 40),
+    captionSize: String(raw.captionSize || "normal").slice(0, 40),
+    captionColor: String(raw.captionColor || "white").slice(0, 40),
+  };
 }
 
-function runCommand(command, args) {
+function getGemini(req) {
+  const key = String(req.body?.geminiApiKey || "").trim();
+  if (!key) throw new Error("Add your Gemini API key in API Settings.");
+  return new GoogleGenAI({ apiKey: key });
+}
+
+function getGroq() {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) throw new Error("The server's Groq API key is not configured.");
+  return new Groq({ apiKey: key });
+}
+
+function command(cmd, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: ["ignore", "ignore", "pipe"]
+    const child = spawn(cmd, args, {
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    let stdout = "";
+    let stderr = "";
 
-    let errorOutput = "";
-
-    child.stderr.on("data", chunk => {
-      errorOutput += chunk.toString();
-    });
-
+    child.stdout.on("data", chunk => stdout += chunk.toString());
+    child.stderr.on("data", chunk => stderr += chunk.toString());
     child.on("error", reject);
-
     child.on("close", code => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(
-          `Video processing failed: ${errorOutput.slice(-1500)}`
-        ));
-      }
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(stderr || `${cmd} failed with code ${code}`));
     });
   });
 }
 
-function parseJSON(text, serviceName) {
-  if (!text) {
-    throw new Error(`${serviceName} returned an empty response.`);
-  }
+function ffmpeg(args) {
+  return command("ffmpeg", ["-y", ...args]);
+}
 
-  const cleaned = text
+async function getDuration(file) {
+  const { stdout } = await command("ffprobe", [
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    file,
+  ]);
+  return Number(stdout.trim()) || 0;
+}
+
+function extractJson(text) {
+  const cleaned = String(text || "")
     .replace(/```json/gi, "")
     .replace(/```/g, "")
     .trim();
-
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
-
   if (start < 0 || end < start) {
-    throw new Error(`${serviceName} did not return valid JSON.`);
+    throw new Error("AI returned an invalid response. Please try again.");
   }
-
-  try {
-    return JSON.parse(cleaned.slice(start, end + 1));
-  } catch {
-    throw new Error(`${serviceName} returned invalid JSON.`);
-  }
+  return JSON.parse(cleaned.slice(start, end + 1));
 }
 
-function validateClips(clips) {
-  if (!Array.isArray(clips) || clips.length < 2 || clips.length > 6) {
-    throw new Error("Please select between 2 and 6 scenes.");
+function createJob() {
+  const id = crypto.randomUUID();
+  const directory = path.join(JOBS_DIR, id);
+  fs.mkdirSync(directory, { recursive: true });
+
+  const job = {
+    id,
+    directory,
+    stage: "queued",
+    progress: 0,
+    message: "Starting...",
+    error: null,
+    result: null,
+    createdAt: Date.now(),
+  };
+
+  jobs.set(id, job);
+  return job;
+}
+
+function setJob(job, stage, progress, message) {
+  job.stage = stage;
+  job.progress = progress;
+  job.message = message;
+}
+
+function validateClips(clips, videoDuration) {
+  if (!Array.isArray(clips) || clips.length < 2) {
+    throw new Error("Could not identify enough scenes in the video.");
   }
 
-  const valid = clips.map(clip => ({
-    start: Number(clip.start),
-    end: Number(clip.end),
-    reason: String(clip.reason || "Selected scene"),
-    description: String(clip.description || "").trim()
-  }));
+  const normalized = clips.map((clip, index) => {
+    const start = Number(clip.start);
+    const end = Number(clip.end);
 
-  for (const clip of valid) {
     if (
-      !Number.isFinite(clip.start) ||
-      !Number.isFinite(clip.end) ||
-      clip.start < 0 ||
-      clip.end <= clip.start ||
-      clip.end - clip.start < 2 ||
-      clip.end - clip.start > 25 ||
-      !clip.description
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      start < 0 ||
+      end <= start ||
+      end > videoDuration + 0.5
     ) {
-      throw new Error(
-        "A scene has invalid timestamps or is missing its description."
-      );
+      throw new Error(`Scene ${index + 1} has invalid timestamps.`);
     }
+
+    return {
+      start,
+      end,
+      description: String(clip.description || clip.reason || "").trim(),
+      reason: String(clip.reason || "").trim(),
+    };
+  });
+
+  normalized.sort((a, b) => a.start - b.start);
+  return normalized;
+}
+
+function parseManualClips(raw, videoDuration) {
+  const clips = parseJsonField(raw, []);
+  if (!Array.isArray(clips) || clips.length < 2 || clips.length > 6) {
+    throw new Error("Manual mode needs between 2 and 6 scenes.");
   }
 
-  valid.sort((a, b) => a.start - b.start);
+  const normalized = clips.map((clip, index) => {
+    const start = Number(clip.start);
+    const end = Number(clip.end);
 
-  const total = valid.reduce(
-    (sum, clip) => sum + clip.end - clip.start,
-    0
-  );
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      start < 0 ||
+      end <= start ||
+      end > videoDuration
+    ) {
+      throw new Error(`Check the timestamps for scene ${index + 1}.`);
+    }
 
+    return {
+      start,
+      end,
+      description: "",
+      reason: "Manually selected scene",
+    };
+  }).sort((a, b) => a.start - b.start);
+
+  const total = normalized.reduce((sum, clip) => sum + clip.end - clip.start, 0);
   if (total < 10 || total > 90) {
     throw new Error("Selected scenes must total between 10 and 90 seconds.");
   }
 
-  return valid;
+  return normalized;
 }
 
-function getManualClips(value) {
-  let clips;
-
-  try {
-    clips = typeof value === "string"
-      ? JSON.parse(value)
-      : value;
-  } catch {
-    throw new Error("Manual timestamps are not valid JSON.");
-  }
-
-  if (!Array.isArray(clips)) {
-    throw new Error("Please provide your manual scene timestamps.");
-  }
-
-  return validateClips(
-    clips.map((clip, index) => ({
-      start: clip.start,
-      end: clip.end,
-      reason: clip.reason || "Manually selected scene",
-      description:
-        clip.description || `Scene ${index + 1} selected by the user`
-    }))
-  );
-}
-
-async function generateContentWithRetry(request, jobId) {
-  const waits = [2000, 5000, 10000];
-
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      return await ai.models.generateContent(request);
-    } catch (error) {
-      console.error("GEMINI ERROR:", error?.message || error);
-
-      const message = String(error?.message || "").toLowerCase();
-      const status = String(error?.status || error?.code || "");
-
-      const retryable =
-        ["429", "500", "502", "503", "504"].includes(status) ||
-        [
-          "unavailable",
-          "rate limit",
-          "temporarily unavailable",
-          "timeout",
-          "network"
-        ].some(term => message.includes(term));
-
-      if (!retryable || attempt === 4) {
-        throw new Error(`Gemini analysis failed: ${error.message}`);
-      }
-
-      updateJob(jobId, {
-        stage: "analysing",
-        progress: 40,
-        message: `Gemini is busy. Retrying (${attempt + 1}/4)...`
-      });
-
-      await sleep(waits[attempt - 1]);
-    }
-  }
-
-  throw new Error("Gemini analysis could not be completed.");
-}
-
-async function analyseVideo(filePath, mimeType, jobId) {
-  updateJob(jobId, {
-    stage: "analysing",
-    progress: 15,
-    message: "Uploading video to Gemini..."
-  });
-
+async function analyzeScenes(req, videoPath, duration, mode, manualClips) {
+  const ai = getGemini(req);
   const uploaded = await ai.files.upload({
-    file: filePath,
-    config: { mimeType }
+    file: videoPath,
+    config: { mimeType: "video/mp4" },
   });
 
-  if (!uploaded.name) {
-    throw new Error("Gemini did not provide a video reference.");
-  }
-
-  let file = uploaded;
-  const startedAt = Date.now();
-
-  while (true) {
-    const state = String(file.state || "").toUpperCase();
-
-    if (state.includes("ACTIVE")) break;
-
-    if (state.includes("FAILED")) {
-      throw new Error("Gemini could not process the video.");
-    }
-
-    if (Date.now() - startedAt > 5 * 60 * 1000) {
-      throw new Error("Gemini video processing timed out.");
-    }
-
-    updateJob(jobId, {
-      progress: 25,
-      message: `Gemini is preparing the video: ${state || "PROCESSING"}`
-    });
-
-    await sleep(5000);
-    file = await ai.files.get({ name: uploaded.name });
-  }
-
-  updateJob(jobId, {
-    progress: 38,
-    message: "Gemini is studying the scenes..."
-  });
+  const manual = mode === "manual";
+  const sceneRanges = manual
+    ? manualClips.map(({ start, end }) => ({ start, end }))
+    : [];
 
   const prompt = `
-Analyse the supplied video as a professional video editor.
+Analyze the uploaded movie video and return JSON only.
 
-Select 2 to 6 useful scenes for a coherent movie recap.
-Return scenes in chronological order.
+${manual
+  ? `Analyze these exact ranges, in the same order:
+${JSON.stringify(sceneRanges)}
+Return one factual visible-action description for each range.`
+  : `Select 3 to 15 useful, visually distinct scenes in chronological order.
+Avoid repeated shots and avoid jumping backward or forward in time.`}
 
-For every scene provide:
-- start: start time in seconds
-- end: end time in seconds
-- reason: why the scene matters
-- description: factual description of what visibly happens
-
-Rules:
-- Never invent events.
-- Describe visible actions clearly.
-- Do not copy movie dialogue.
-- Do not guess character names.
-- Each clip must be 3 to 15 seconds.
-- Total selected footage should be 20 to 55 seconds.
-- Do not select repeated or unrelated moments.
-- Keep the story understandable in chronological order.
-
-Return ONLY JSON:
+Return:
 {
   "clips": [
     {
-      "start": 10,
-      "end": 18,
-      "reason": "Why this scene matters",
-      "description": "What visibly happens"
+      "start": 0,
+      "end": 8,
+      "description": "What is visibly happening in this scene."
     }
   ]
 }
+
+Rules:
+- Timestamps are seconds and must be within the ${duration}-second video.
+- Do not invent events, dialogue, or details.
+- Keep scenes chronological.
+- Return valid JSON only.
 `;
 
-  const response = await generateContentWithRetry({
-    model: GEMINI_MODEL,
+  const response = await ai.models.generateContent({
+    model: process.env.GEMINI_VIDEO_MODEL || "gemini-2.5-flash",
     contents: [{
       role: "user",
       parts: [
         {
           fileData: {
-            fileUri: file.uri,
-            mimeType: file.mimeType || mimeType
-          }
+            fileUri: uploaded.uri,
+            mimeType: uploaded.mimeType,
+          },
         },
-        { text: prompt }
-      ]
-    }]
-  }, jobId);
+        { text: prompt },
+      ],
+    }],
+    config: { responseMimeType: "application/json" },
+  });
 
-  const text = typeof response.text === "function"
-    ? response.text()
-    : response.text;
+  const parsed = extractJson(response.text);
+  let clips = validateClips(parsed.clips, duration);
 
-  const result = parseJSON(text, "Gemini");
+  if (manual) {
+    clips = manualClips.map((range, index) => ({
+      start: range.start,
+      end: range.end,
+      description:
+        clips[index]?.description ||
+        `Visible action from ${range.start} to ${range.end} seconds`,
+      reason: "Manually selected scene",
+    }));
+  }
+
+  return clips;
+}
+
+async function createNarration(clips, settings) {
+  const groq = getGroq();
+
+  const prompt = `
+Write a clear, engaging movie recap narration matching these scenes.
+Follow the scene order exactly. Do not jump between unrelated moments.
+
+Style: ${settings.recapStyle}
+Additional instructions: ${settings.scriptInstructions || "None"}
+
+Rules:
+- Natural, simple spoken English.
+- No generic opening hook.
+- Do not use character names; describe people by role or appearance.
+- Do not invent plot events beyond the scene descriptions.
+- Keep each scene's narration concise but meaningful.
+- Return JSON with one narration entry per scene, in the same order.
+
+Scenes:
+${JSON.stringify(clips, null, 2)}
+
+Required format:
+{
+  "sceneNarration": [
+    "Narration for scene one",
+    "Narration for scene two"
+  ]
+}
+`;
+
+  const completion = await groq.chat.completions.create({
+    model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+    temperature: 0.65,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: "Write coherent, scene-matched movie recaps." },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  const parsed = extractJson(completion.choices?.[0]?.message?.content || "");
+  if (
+    !Array.isArray(parsed.sceneNarration) ||
+    parsed.sceneNarration.length !== clips.length
+  ) {
+    throw new Error("Narration did not match the selected scenes.");
+  }
+
+  return parsed.sceneNarration.map(line =>
+    String(line || "").replace(/\s+/g, " ").trim()
+  );
+}
+
+function joinNarration(lines) {
+  return lines.join(" ").replace(/\s+/g, " ").trim();
+}
+
+async function reviseNarration(job, settings) {
+  const groq = getGroq();
+
+  const completion = await groq.chat.completions.create({
+    model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+    temperature: 0.7,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: "Revise movie recap narration while preserving scene order.",
+      },
+      {
+        role: "user",
+        content: `
+Rewrite the recap to be more natural and engaging.
+Keep it scene-matched, chronological, and factually grounded.
+Do not use character names or add events.
+Style: ${settings.recapStyle}
+Extra instructions: ${settings.scriptInstructions || "None"}
+
+Scenes:
+${JSON.stringify(job.clips, null, 2)}
+
+Current narration:
+${job.narration}
+
+Return JSON with "sceneNarration", exactly ${job.clips.length} entries.
+`,
+      },
+    ],
+  });
+
+  const parsed = extractJson(completion.choices?.[0]?.message?.content || "");
+  if (
+    !Array.isArray(parsed.sceneNarration) ||
+    parsed.sceneNarration.length !== job.clips.length
+  ) {
+    throw new Error("The regenerated narration did not match the scenes.");
+  }
+
+  job.sceneNarration = parsed.sceneNarration.map(line =>
+    String(line || "").replace(/\s+/g, " ").trim()
+  );
+  job.narration = joinNarration(job.sceneNarration);
 
   return {
-    clips: validateClips(result.clips)
+    narration: job.narration,
+    clips: job.clips,
   };
 }
 
-async function writeNarration(clips, jobId) {
-  updateJob(jobId, {
-    stage: "writing",
-    progress: 63,
-    message: "Groq is writing your movie recap..."
-  });
+async function createVideo(job, req) {
+  setJob(job, "rendering", 5, "Preparing scenes...");
 
-  const sceneNotes = clips.map((clip, index) => ({
-    scene: index + 1,
-    description: clip.description,
-    importance: clip.reason,
-    durationSeconds: Math.round(clip.end - clip.start)
-  }));
+  const resolution = job.settings.format === "16:9"
+    ? [1920, 1080]
+    : job.settings.format === "1:1"
+    ? [1080, 1080]
+    : [1080, 1920];
 
-  const response = await fetch(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${GROQ_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages: [
-          {
-            role: "system",
-            content: `
-You are a skilled movie recap narrator.
+  const [width, height] = resolution;
+  const sceneFiles = [];
 
-Write clear, natural, engaging narration that explains the supplied scenes.
+  for (let i = 0; i < job.clips.length; i++) {
+    const clip = job.clips[i];
+    const scenePath = path.join(job.directory, `scene-${i}.mp4`);
+    const length = clip.end - clip.start;
 
-Rules:
-- Follow the exact chronological order.
-- Connect every scene naturally.
-- Explain what is happening, not just what viewers can see.
-- Use simple, conversational English.
-- Do not use character names.
-- Refer to people by descriptions or roles.
-- Do not invent events, motives, or outcomes.
-- Do not copy dialogue from the movie.
-- Do not add a generic opening hook.
-- Avoid robotic phrases and repetitive transitions.
-- Make it sound like a human explaining a movie.
-- Write approximately 85 to 115 words.
-- Return only narration, without a title or notes.
-`
-          },
-          {
-            role: "user",
-            content: JSON.stringify(sceneNotes)
-          }
-        ],
-        temperature: 0.7,
-        max_completion_tokens: 500
-      })
-    }
-  );
-
-  if (!response.ok) {
-    const details = await response.text();
-    console.error("GROQ ERROR:", details);
-    throw new Error(
-      `Groq narration failed (${response.status}). Check your Groq model and API key.`
-    );
-  }
-
-  const data = await response.json();
-  const narration = data?.choices?.[0]?.message?.content?.trim();
-
-  if (!narration || narration.length < 30) {
-    throw new Error("Groq did not produce a usable narration.");
-  }
-
-  return narration;
-}
-
-async function generateVoice(narration, outputPath, jobId) {
-  updateJob(jobId, {
-    stage: "voicing",
-    progress: 70,
-    message: "Gemini is generating your narrator voice..."
-  });
-
-  const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/interactions",
-    {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": GEMINI_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: GEMINI_TTS_MODEL,
-        input: [{
-          type: "user_input",
-          content: [{
-            type: "text",
-            text: narration,
-            annotations: [{
-              type: "speech_metadata",
-              style: "Natural, conversational movie recap narrator. "
-                + "Engaging and expressive, clear pronunciation, "
-                + "medium pace, confident storytelling."
-            }]
-          }]
-        }],
-        response_format: {
-          type: "audio"
-        },
-        generation_config: {
-          speech_config: [
-            { voice: GEMINI_TTS_VOICE }
-          ]
-        }
-      })
-    }
-  );
-
-  if (!response.ok) {
-    const details = await response.text();
-    console.error("GEMINI TTS ERROR:", details);
-
-    throw new Error(
-      `Gemini voice generation failed (${response.status}). Check Gemini TTS access or quota.`
-    );
-  }
-
-  const data = await response.json();
-
-  let audioBase64 = data?.output_audio?.data;
-
-  if (!audioBase64 && Array.isArray(data?.steps)) {
-    for (const step of data.steps) {
-      if (step?.type !== "model_output") continue;
-
-      for (const content of step.content || []) {
-        if (content?.type === "audio" && content?.data) {
-          audioBase64 = content.data;
-        }
-      }
-    }
-  }
-
-  if (!audioBase64) {
-    console.error(
-      "GEMINI TTS RESPONSE:",
-      JSON.stringify(data).slice(0, 2000)
-    );
-    throw new Error("Gemini did not return audio data.");
-  }
-
-  const audioBuffer = Buffer.from(audioBase64, "base64");
-
-  if (audioBuffer.length < 1000) {
-    throw new Error("Gemini returned an invalid audio file.");
-  }
-
-  await fs.promises.writeFile(outputPath, audioBuffer);
-  return outputPath;
-}
-
-async function renderSilentVideo(inputPath, clips, outputPath, jobId) {
-  const directory = path.dirname(outputPath);
-  const clipFiles = [];
-
-  for (let i = 0; i < clips.length; i++) {
-    const clip = clips[i];
-    const clipPath = path.join(directory, `clip-${i}.mp4`);
-
-    updateJob(jobId, {
-      stage: "rendering",
-      progress: 75 + Math.floor((i / clips.length) * 12),
-      message: `Rendering selected scene ${i + 1} of ${clips.length}...`
-    });
-
-    await runCommand(ffmpegPath, [
-      "-y",
+    await ffmpeg([
       "-ss", String(clip.start),
-      "-i", inputPath,
-      "-t", String(clip.end - clip.start),
+      "-i", job.sourceVideo,
+      "-t", String(length),
       "-vf",
-      "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
-      "-c:v", "libx264",
-      "-preset", "ultrafast",
-      "-crf", "26",
+      `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,fps=30`,
       "-an",
-      "-movflags", "+faststart",
-      clipPath
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-crf", "23",
+      "-pix_fmt", "yuv420p",
+      scenePath,
     ]);
 
-    clipFiles.push(clipPath);
+    sceneFiles.push(scenePath);
+    job.progress = 10 + Math.round(((i + 1) / job.clips.length) * 45);
+    job.message = `Preparing scene ${i + 1} of ${job.clips.length}...`;
   }
 
-  const listPath = path.join(directory, "clips.txt");
-
+  const concatPath = path.join(job.directory, "concat.txt");
   fs.writeFileSync(
-    listPath,
-    clipFiles.map(file => `file '${file.replace(/'/g, "'\\''")}'`).join("\n")
+    concatPath,
+    sceneFiles.map(file => `file '${file.replace(/'/g, "'\\''")}'`).join("\n")
   );
 
-  updateJob(jobId, {
-    progress: 88,
-    message: "Joining selected scenes..."
-  });
-
-  await runCommand(ffmpegPath, [
-    "-y",
+  const silentPath = path.join(job.directory, "silent.mp4");
+  await ffmpeg([
     "-f", "concat",
     "-safe", "0",
-    "-i", listPath,
+    "-i", concatPath,
     "-c", "copy",
-    "-movflags", "+faststart",
-    outputPath
+    silentPath,
   ]);
-}
 
-async function combineNarration(videoPath, audioPath, outputPath, jobId) {
-  updateJob(jobId, {
-    stage: "mixing",
-    progress: 92,
-    message: "Combining the video with AI narration..."
+  setJob(job, "rendering", 65, "Generating narration voice...");
+
+  const ai = getGemini(req);
+  const voiceName = job.settings.voiceType || "Kore";
+
+  const voiceResponse = await ai.models.generateContent({
+    model: process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts",
+    contents: [{
+      role: "user",
+      parts: [{ text: job.narration }],
+    }],
+    config: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName },
+        },
+      },
+    },
   });
 
-  await runCommand(ffmpegPath, [
-    "-y",
-    "-i", videoPath,
+  const audioPart = voiceResponse.candidates?.[0]?.content?.parts?.find(
+    part => part.inlineData?.data
+  );
+
+  if (!audioPart?.inlineData?.data) {
+    throw new Error("Voice generation returned no audio.");
+  }
+
+  const rawAudio = path.join(job.directory, "voice.raw");
+  const audioPath = path.join(job.directory, "voice.m4a");
+  const mime = audioPart.inlineData.mimeType || "audio/pcm";
+
+  fs.writeFileSync(rawAudio, Buffer.from(audioPart.inlineData.data, "base64"));
+
+  let audioInput;
+  if (mime.includes("wav")) {
+    audioInput = ["-i", rawAudio];
+  } else if (mime.includes("mpeg") || mime.includes("mp3")) {
+    audioInput = ["-f", "mp3", "-i", rawAudio];
+  } else {
+    audioInput = ["-f", "s16le", "-ar", "24000", "-ac", "1", "-i", rawAudio];
+  }
+
+  await ffmpeg([
+    ...audioInput,
+    "-filter:a", `atempo=${job.settings.voiceSpeed}`,
+    "-c:a", "aac",
+    "-b:a", "192k",
+    audioPath,
+  ]);
+
+  let videoForMux = silentPath;
+
+  if (job.settings.includeCaptions) {
+    setJob(job, "rendering", 85, "Adding captions...");
+    const srtPath = path.join(job.directory, "captions.srt");
+    const captionedPath = path.join(job.directory, "captioned.mp4");
+
+    let time = 0;
+    const subtitles = [];
+
+    const fmt = seconds => {
+      const total = Math.round(seconds * 1000);
+      const h = Math.floor(total / 3600000);
+      const m = Math.floor((total % 3600000) / 60000);
+      const s = Math.floor((total % 60000) / 1000);
+      const ms = total % 1000;
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+    };
+
+    job.sceneNarration.forEach((line, index) => {
+      const duration = job.clips[index].end - job.clips[index].start;
+      const words = String(line || "").split(/\s+/).filter(Boolean);
+      const chunks = [];
+
+      for (let i = 0; i < words.length; i += 8) {
+        chunks.push(words.slice(i, i + 8).join(" "));
+      }
+
+      const chunkLength = duration / Math.max(chunks.length, 1);
+      chunks.forEach((chunk, chunkIndex) => {
+        const start = time + chunkIndex * chunkLength;
+        const end = Math.min(time + duration, start + chunkLength);
+        subtitles.push(
+          `${subtitles.length + 1}\n${fmt(start)} --> ${fmt(end)}\n${chunk}\n`
+        );
+      });
+      time += duration;
+    });
+
+    fs.writeFileSync(srtPath, subtitles.join("\n"), "utf8");
+
+    await ffmpeg([
+      "-i", silentPath,
+      "-vf", `subtitles=${srtPath.replace(/:/g, "\\:")}`,
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-crf", "23",
+      "-pix_fmt", "yuv420p",
+      captionedPath,
+    ]);
+
+    videoForMux = captionedPath;
+  }
+
+  setJob(job, "rendering", 93, "Combining video and voice...");
+
+  const finalPath = path.join(job.directory, "final.mp4");
+  await ffmpeg([
+    "-i", videoForMux,
     "-i", audioPath,
     "-map", "0:v:0",
     "-map", "1:a:0",
     "-c:v", "copy",
     "-c:a", "aac",
-    "-b:a", "160k",
     "-shortest",
     "-movflags", "+faststart",
-    outputPath
+    finalPath,
   ]);
+
+  job.result = {
+    narration: job.narration,
+    clips: job.clips,
+    videoUrl: `/api/jobs/${job.id}/video`,
+    downloadUrl: `/api/jobs/${job.id}/download`,
+  };
+
+  setJob(job, "ready", 100, "Your recap is ready.");
 }
 
-async function processVideo(jobId, buffer, mimeType, mode, manualClips) {
-  const directory = await fs.promises.mkdtemp(
-    path.join(os.tmpdir(), "reelnarrator-")
-  );
-
-  const inputPath = path.join(directory, "original-video.mp4");
-  const silentPath = path.join(directory, "silent-short.mp4");
-  const audioPath = path.join(directory, "narration.wav");
-  const outputPath = path.join(directory, "finished-short.mp4");
-
-  const job = jobs.get(jobId);
-  if (job) job.directory = directory;
+app.post("/api/create-short", upload.single("movie"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ ok: false, error: "Choose a video first." });
+  }
 
   try {
-    updateJob(jobId, {
-      stage: "saving",
-      progress: 10,
-      message: "Saving uploaded video..."
-    });
+    getGemini(req);
+    getGroq();
 
-    await fs.promises.writeFile(inputPath, buffer);
-
-    let analysis;
-
-    if (mode === "manual") {
-      updateJob(jobId, {
-        stage: "selecting",
-        progress: 38,
-        message: "Using your manually selected scenes..."
-      });
-
-      analysis = {
-        clips: getManualClips(manualClips)
-      };
-    } else {
-      analysis = await analyseVideo(inputPath, mimeType, jobId);
-    }
-
-    updateJob(jobId, {
-      stage: "selecting",
-      progress: 60,
-      message: "Scenes selected. Preparing your recap...",
-      clips: analysis.clips
-    });
-
-    const narration = await writeNarration(analysis.clips, jobId);
-
-    await generateVoice(narration, audioPath, jobId);
-
-    await renderSilentVideo(
-      inputPath,
-      analysis.clips,
-      silentPath,
-      jobId
-    );
-
-    await combineNarration(
-      silentPath,
-      audioPath,
-      outputPath,
-      jobId
-    );
-
-    await runCommand(ffmpegPath, [
-      "-v", "error",
-      "-i", outputPath,
-      "-f", "null",
-      "-"
-    ]);
-
-    const stats = await fs.promises.stat(outputPath);
-
-    if (!stats.isFile() || stats.size < 1000) {
-      throw new Error("The finished video file is invalid.");
-    }
-
-    updateJob(jobId, {
-      stage: "ready",
-      progress: 100,
-      message: "Your video with AI narration is ready.",
-      result: {
-        videoUrl: `/api/video/${jobId}`,
-        downloadUrl: `/api/download/${jobId}`,
-        clips: analysis.clips,
-        narration,
-        size: stats.size
-      }
-    });
-
-  } catch (error) {
-    console.error(`Job ${jobId} failed:`, error);
-
-    updateJob(jobId, {
-      stage: "error",
-      progress: 0,
-      message: error.message || "Video generation failed.",
-      error: error.message || "Video generation failed."
-    });
-  }
-}
-
-function getReadyVideo(req, res, download = false) {
-  const job = jobs.get(req.params.id);
-
-  if (!job || job.stage !== "ready" || !job.directory) {
-    return res.status(404).json({
-      error: "Finished video is no longer available. Please create it again."
-    });
-  }
-
-  const outputPath = path.join(job.directory, "finished-short.mp4");
-
-  if (!fs.existsSync(outputPath)) {
-    return res.status(404).json({
-      error: "Video file is missing. Please create it again."
-    });
-  }
-
-  res.setHeader("Content-Type", "video/mp4");
-  res.setHeader("Accept-Ranges", "bytes");
-  res.setHeader("Cache-Control", "no-store");
-
-  if (download) {
-    return res.download(outputPath, "reelnarrator-short.mp4");
-  }
-
-  return res.sendFile(outputPath);
-}
-
-app.post("/api/create-short", (req, res) => {
-  upload.single("movie")(req, res, error => {
-    if (error) {
-      return res.status(400).json({
-        ok: false,
-        error: error.message
-      });
-    }
-
-    if (!ai) {
-      return res.status(500).json({
-        ok: false,
-        error: "GEMINI_API_KEY is missing. It is still needed for voice generation."
-      });
-    }
-
-    if (!GROQ_KEY) {
-      return res.status(500).json({
-        ok: false,
-        error: "GROQ_API_KEY is missing."
-      });
-    }
-
-    if (!ffmpegPath) {
-      return res.status(500).json({
-        ok: false,
-        error: "FFmpeg is not available."
-      });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({
-        ok: false,
-        error: "Please select a video."
-      });
-    }
-
+    const settings = getSettings(req.body.settings);
     const mode = req.body.mode === "manual" ? "manual" : "auto";
+    const manualClips = parseJsonField(req.body.manualClips, []);
+    const job = createJob();
 
-    if (mode === "manual") {
+    job.settings = settings;
+    job.mode = mode;
+    job.sourceVideo = path.join(job.directory, "source.mp4");
+    fs.copyFileSync(req.file.path, job.sourceVideo);
+    fs.unlinkSync(req.file.path);
+
+    setJob(job, "processing", 5, "Reading video...");
+
+    (async () => {
       try {
-        getManualClips(req.body.manualClips);
-      } catch (validationError) {
-        return res.status(400).json({
-          ok: false,
-          error: validationError.message
-        });
+        const duration = await getDuration(job.sourceVideo);
+        if (!duration || duration < 3) {
+          throw new Error("The uploaded video is too short or unreadable.");
+        }
+
+        setJob(job, "processing", 20, "Analyzing scenes...");
+
+        const clips = await analyzeScenes(
+          req,
+          job.sourceVideo,
+          duration,
+          mode,
+          manualClips
+        );
+
+        job.clips = clips;
+
+        setJob(job, "processing", 65, "Writing narration...");
+        job.sceneNarration = await createNarration(clips, settings);
+        job.narration = joinNarration(job.sceneNarration);
+
+        job.result = {
+          narration: job.narration,
+          clips: job.clips,
+        };
+
+        setJob(job, "script_ready", 100, "Review your narration.");
+      } catch (error) {
+        job.error = error.message || "Recap creation failed.";
+        setJob(job, "error", 100, job.error);
       }
-    }
+    })();
 
-    const id = crypto.randomUUID();
-
-    jobs.set(id, {
-      id,
-      stage: "queued",
-      progress: 0,
-      message: "Video received. Preparing your job...",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      result: null,
-      error: null,
-      directory: null
-    });
-
-    res.status(202).json({
-      ok: true,
-      id,
-      statusUrl: `/api/jobs/${id}`
-    });
-
-    processVideo(
-      id,
-      req.file.buffer,
-      req.file.mimetype,
-      mode,
-      req.body.manualClips
-    );
-  });
+    res.json({ ok: true, id: job.id });
+  } catch (error) {
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch {}
+    res.status(400).json({ ok: false, error: error.message });
+  }
 });
 
 app.get("/api/jobs/:id", (req, res) => {
   const job = jobs.get(req.params.id);
-
   if (!job) {
-    return res.status(404).json({
-      error: "Job not found. The server may have restarted."
-    });
+    return res.status(404).json({ error: "Job not found." });
   }
-
-  res.set("Cache-Control", "no-store");
 
   res.json({
     id: job.id,
     stage: job.stage,
     progress: job.progress,
     message: job.message,
+    error: job.error,
     result: job.result,
-    error: job.error
   });
 });
 
-app.get("/api/video/:id", (req, res) => {
-  return getReadyVideo(req, res, false);
+app.post("/api/jobs/:id/regenerate-script", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) {
+    return res.status(404).json({ ok: false, error: "Job not found." });
+  }
+
+  try {
+    const settings = getSettings(req.body.settings);
+    const result = await reviseNarration(job, settings);
+    job.settings = settings;
+    job.result = result;
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
 });
 
-app.get("/api/download/:id", (req, res) => {
-  return getReadyVideo(req, res, true);
-});
+app.post("/api/jobs/:id/finalize", async (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) {
+    return res.status(404).json({ ok: false, error: "Job not found." });
+  }
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "ReelNarrator",
-    editor: "AI-analysis-manual-scene-selection-recap-writing-and-voice-rendering",
-    geminiConfigured: Boolean(GEMINI_KEY),
-    geminiTtsConfigured: Boolean(GEMINI_KEY),
-    geminiTtsModel: GEMINI_TTS_MODEL,
-    geminiTtsVoice: GEMINI_TTS_VOICE,
-    groqConfigured: Boolean(GROQ_KEY),
-    ffmpegConfigured: Boolean(ffmpegPath)
-  });
-});
+  try {
+    getGemini(req);
 
-// Remove old completed jobs and their temporary files.
-setInterval(async () => {
-  const now = Date.now();
-
-  for (const [id, job] of jobs.entries()) {
-    const updatedAt = Number(job.updatedAt || job.createdAt || now);
-
-    if (now - updatedAt < JOB_TTL_MS) continue;
-    if (job.stage !== "ready" && job.stage !== "error") continue;
-
-    jobs.delete(id);
-
-      if (job.directory) {
-      await fs.promises.rm(job.directory, {
-        recursive: true,
-        force: true
+    if (job.stage === "rendering") {
+      return res.status(409).json({
+        ok: false,
+        error: "This video is already rendering.",
       });
     }
-  }
-}, 5 * 60 * 1000);
 
-app.listen(PORT, () => {
-  console.log(`ReelNarrator running on port ${PORT}`);
+    const narration = String(req.body.narration || "").trim();
+    if (narration.length < 20) {
+      return res.status(400).json({
+        ok: false,
+        error: "Please enter a longer narration.",
+      });
+    }
+
+    job.settings = getSettings(req.body.settings);
+    job.narration = narration;
+
+    // The reviewed full narration is used for voice generation.
+    // Scene narration remains available for caption timing.
+    job.result = {
+      narration: job.narration,
+      clips: job.clips,
+    };
+
+    createVideo(job, req).catch(error => {
+      job.error = error.message || "Final rendering failed.";
+      setJob(job, "error", 100, job.error);
+    });
+
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
 });
+
+app.get("/api/jobs/:id/video", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job || job.stage !== "ready") {
+    return res.status(404).json({ error: "Video is not ready yet." });
+  }
+
+  const file = path.join(job.directory, "final.mp4");
+  if (!fs.existsSync(file)) {
+    r
