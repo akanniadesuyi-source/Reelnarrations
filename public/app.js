@@ -1,4 +1,3 @@
-
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -64,193 +63,75 @@ function updateProgress(job) {
   }
 
   const stages = [
-    "queued",
-    "saving",
-    "analysing",
-    "selecting",
-    "rendering",
-    "finalising",
-    "ready"
+    "queued", "saving", "analysing",
+    "selecting", "rendering", "finalising", "ready"
   ];
 
   const currentIndex = stages.indexOf(job.stage);
 
   document.querySelectorAll("#processingSteps [data-stage]").forEach((item) => {
     const index = stages.indexOf(item.dataset.stage);
-
-    item.classList.toggle(
-      "completed",
-      index !== -1 && index < currentIndex
-    );
-
-    item.classList.toggle(
-      "current",
-      item.dataset.stage === job.stage
-    );
+    item.classList.toggle("completed", index !== -1 && index < currentIndex);
+    item.classList.toggle("current", item.dataset.stage === job.stage);
   });
 }
 
-/* AUTO / MANUAL CONTROLS */
+/* SOURCE TABS */
 
-function createModeControls() {
-  if (!uploadBtn || $("modeControls")) return;
-
-  const container = document.createElement("section");
-  container.id = "modeControls";
-  container.style.cssText = `
-    margin: 18px 0;
-    padding: 16px;
-    border: 1px solid rgba(128,128,128,.3);
-    border-radius: 12px;
-  `;
-
-  const heading = document.createElement("h3");
-  heading.textContent = "Choose clip selection mode";
-
-  const description = document.createElement("p");
-  description.textContent =
-    "Auto lets AI select scenes. Manual lets you choose the timestamps yourself.";
-
-  const select = document.createElement("select");
-  select.id = "clipMode";
-  select.style.cssText = `
-    width: 100%;
-    padding: 12px;
-    margin: 8px 0 14px;
-    border-radius: 8px;
-  `;
-
-  const autoOption = document.createElement("option");
-  autoOption.value = "auto";
-  autoOption.textContent = "Auto — AI selects the best scenes";
-
-  const manualOption = document.createElement("option");
-  manualOption.value = "manual";
-  manualOption.textContent = "Manual — I choose the scenes";
-
-  select.append(autoOption, manualOption);
-
-  const manualPanel = document.createElement("div");
-  manualPanel.id = "manualPanel";
-  manualPanel.hidden = true;
-
-  const manualHeading = document.createElement("h4");
-  manualHeading.textContent = "Your selected scenes";
-
-  const manualInfo = document.createElement("p");
-  manualInfo.textContent =
-    "Enter each scene's start and end time in seconds. Add between 2 and 6 scenes.";
-
-  const clipList = document.createElement("div");
-  clipList.id = "manualClipList";
-
-  const addButton = document.createElement("button");
-  addButton.type = "button";
-  addButton.id = "addManualClip";
-  addButton.textContent = "+ Add another scene";
-  addButton.style.cssText = "margin: 10px 0; padding: 10px;";
-
-  manualPanel.append(manualHeading, manualInfo, clipList, addButton);
-  container.append(heading, description, select, manualPanel);
-
-  const buttonParent = uploadBtn.parentElement;
-  buttonParent.insertBefore(container, uploadBtn);
-
-  function addClip() {
-    const existing = clipList.querySelectorAll(".manual-clip");
-
-    if (existing.length >= CONFIG.maxClips) {
-      setStatus("You can select a maximum of 6 scenes.");
-      return;
-    }
-
-    const number = existing.length + 1;
-
-    const row = document.createElement("div");
-    row.className = "manual-clip";
-    row.style.cssText = `
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-      margin: 12px 0;
-      padding: 12px;
-      border: 1px solid rgba(128,128,128,.25);
-      border-radius: 8px;
-    `;
-
-    const title = document.createElement("strong");
-    title.textContent = `Scene ${number}`;
-    title.style.gridColumn = "1 / -1";
-
-    const startLabel = document.createElement("label");
-    startLabel.textContent = "Start time (seconds)";
-
-    const start = document.createElement("input");
-    start.type = "number";
-    start.min = "0";
-    start.step = "0.1";
-    start.placeholder = "e.g. 12";
-    start.className = "manual-start";
-    start.style.cssText = "width: 100%; padding: 10px;";
-
-    startLabel.appendChild(start);
-
-    const endLabel = document.createElement("label");
-    endLabel.textContent = "End time (seconds)";
-
-    const end = document.createElement("input");
-    end.type = "number";
-    end.min = "0";
-    end.step = "0.1";
-    end.placeholder = "e.g. 25";
-    end.className = "manual-end";
-    end.style.cssText = "width: 100%; padding: 10px;";
-
-    endLabel.appendChild(end);
-
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.textContent = "Remove scene";
-    remove.style.cssText =
-      "grid-column: 1 / -1; padding: 8px;";
-
-    remove.addEventListener("click", () => {
-      if (clipList.children.length <= CONFIG.minClips) {
-        setStatus("Manual mode needs at least 2 scenes.");
-        return;
-      }
-
-      row.remove();
-      renumberClips();
-    });
-
-    row.append(title, startLabel, endLabel, remove);
-    clipList.appendChild(row);
-    renumberClips();
-  }
-
-  function renumberClips() {
-    clipList.querySelectorAll(".manual-clip").forEach((row, index) => {
-      const title = row.querySelector("strong");
-      if (title) title.textContent = `Scene ${index + 1}`;
-    });
-  }
-
-  addButton.addEventListener("click", addClip);
-
-  select.addEventListener("change", () => {
-    const manual = select.value === "manual";
-    manualPanel.hidden = !manual;
-
-    setStatus(
-      manual
-        ? "Manual mode selected. Enter your scene timestamps."
-        : "Auto mode selected. AI will choose the scenes."
-    );
+function selectSource(source) {
+  document.querySelectorAll(".tab[data-source]").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.source === source);
   });
 
-  addClip();
-  addClip();
+  if ($("uploadPane")) $("uploadPane").hidden = source !== "upload";
+  if ($("youtubePane")) $("youtubePane").hidden = source !== "youtube";
+
+  setStatus(
+    source === "youtube"
+      ? "YouTube link processing is not connected yet. Upload a video you have permission to edit."
+      : "Choose a video to get started."
+  );
+}
+
+document.querySelectorAll(".tab[data-source]").forEach((tab) => {
+  tab.addEventListener("click", () => selectSource(tab.dataset.source));
+});
+
+/* MANUAL SCENE CONTROLS */
+
+function renumberScenes() {
+  document.querySelectorAll(".manual-clip").forEach((row, index) => {
+    const title = row.querySelector(".scene-title");
+    if (title) title.textContent = `Scene ${index + 1}`;
+  });
+}
+
+function addManualScene() {
+  const list = $("manualClipList");
+  if (!list) return;
+
+  if (list.querySelectorAll(".manual-clip").length >= CONFIG.maxClips) {
+    setStatus("You can select a maximum of 6 scenes.");
+    return;
+  }
+
+  const row = document.createElement("div");
+  row.className = "manual-clip";
+  row.style.cssText = "margin:14px 0;padding:12px;border:1px solid rgba(128,128,128,.3);border-radius:10px;";
+
+  row.innerHTML = `
+    <strong class="scene-title"></strong>
+    <label>Start time (seconds)
+      <input class="field manual-start" type="number" min="0" step="0.1" placeholder="e.g. 50">
+    </label>
+    <label>End time (seconds)
+      <input class="field manual-end" type="number" min="0" step="0.1" placeholder="e.g. 65">
+    </label>
+    <button class="secondary remove-scene" type="button">Remove scene</button>
+  `;
+
+  list.appendChild(row);
+  renumberScenes();
 }
 
 function getManualClips() {
@@ -272,9 +153,11 @@ function getManualClips() {
       start < 0 ||
       end <= start
     ) {
-      throw new Error(
-        `Please enter valid start and end times for Scene ${index + 1}.`
-      );
+      throw new Error(`Enter valid start and end times for Scene ${index + 1}.`);
+    }
+
+    if (end - start < 2 || end - start > 25) {
+      throw new Error(`Scene ${index + 1} must be between 2 and 25 seconds.`);
     }
 
     clips.push({
@@ -287,33 +170,42 @@ function getManualClips() {
   return clips;
 }
 
-function selectSource(source) {
-  document.querySelectorAll(".tab[data-source]").forEach((tab) => {
-    tab.classList.toggle("active", tab.dataset.source === source);
-  });
+const clipMode = $("clipMode");
+const manualPanel = $("manualPanel");
 
-  if ($("uploadPane")) {
-    $("uploadPane").hidden = source !== "upload";
-  }
-
-  if ($("youtubePane")) {
-    $("youtubePane").hidden = source !== "youtube";
-  }
-
-  if (source === "youtube") {
+if (clipMode && manualPanel) {
+  clipMode.addEventListener("change", () => {
+    manualPanel.hidden = clipMode.value !== "manual";
     setStatus(
-      "YouTube link processing is not connected yet. Upload a video you have permission to edit."
+      clipMode.value === "manual"
+        ? "Manual mode selected. Enter your scene timestamps."
+        : "Auto mode selected. AI will select the scenes."
     );
-  } else {
-    setStatus("Choose a video to get started.");
-  }
+  });
 }
 
-document.querySelectorAll(".tab[data-source]").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    selectSource(tab.dataset.source);
+if ($("addManualClip")) {
+  $("addManualClip").addEventListener("click", addManualScene);
+}
+
+if ($("manualClipList")) {
+  $("manualClipList").addEventListener("click", (event) => {
+    const button = event.target.closest(".remove-scene");
+    if (!button) return;
+
+    const rows = document.querySelectorAll(".manual-clip");
+
+    if (rows.length <= CONFIG.minClips) {
+      setStatus("Manual mode needs at least 2 scenes.");
+      return;
+    }
+
+    button.closest(".manual-clip").remove();
+    renumberScenes();
   });
-});
+}
+
+/* FILE SELECTION */
 
 if (fileInput) {
   fileInput.addEventListener("change", () => {
@@ -324,12 +216,12 @@ if (fileInput) {
     }
 
     if (file) {
-      setStatus(
-        `Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`
-      );
+      setStatus(`Selected: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`);
     }
   });
 }
+
+/* UPLOAD */
 
 function uploadVideo(file, mode, manualClips) {
   return new Promise((resolve, reject) => {
@@ -381,23 +273,17 @@ function uploadVideo(file, mode, manualClips) {
       try {
         data = JSON.parse(xhr.responseText);
       } catch {
-        reject(
-          new Error(`Server returned an invalid response (HTTP ${xhr.status}).`)
-        );
+        reject(new Error(`Server returned an invalid response (HTTP ${xhr.status}).`));
         return;
       }
 
       if (xhr.status < 200 || xhr.status >= 300) {
-        reject(
-          new Error(data.error || `Upload failed (HTTP ${xhr.status}).`)
-        );
+        reject(new Error(data.error || `Upload failed (HTTP ${xhr.status}).`));
         return;
       }
 
       if (!data.ok || !data.id) {
-        reject(
-          new Error(data.error || "The server did not create a processing job.")
-        );
+        reject(new Error(data.error || "The server did not create a processing job."));
         return;
       }
 
@@ -423,6 +309,8 @@ function uploadVideo(file, mode, manualClips) {
   });
 }
 
+/* JOB STATUS */
+
 async function checkJob(jobId, token) {
   while (currentJob === jobId && token === pollToken) {
     const response = await fetch(
@@ -439,9 +327,7 @@ async function checkJob(jobId, token) {
     }
 
     if (!response.ok) {
-      throw new Error(
-        job.error || `Could not check job status (HTTP ${response.status}).`
-      );
+      throw new Error(job.error || `Could not check job status (HTTP ${response.status}).`);
     }
 
     updateProgress(job);
@@ -456,11 +342,11 @@ async function checkJob(jobId, token) {
       throw new Error(job.message || job.error || "Video processing failed.");
     }
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, CONFIG.pollInterval);
-    });
+    await new Promise((resolve) => setTimeout(resolve, CONFIG.pollInterval));
   }
 }
+
+/* RESULT */
 
 function showResult(result) {
   const panel = $("shortPreview");
@@ -468,17 +354,14 @@ function showResult(result) {
   const download = $("shortDownload");
 
   if (!panel || !video || !download) {
-    setStatus("The video is ready, but the preview section is missing from the page.");
+    setStatus("The video is ready, but the preview section is missing.");
     return;
   }
 
-  const videoUrl = result.videoUrl;
-  const downloadUrl = result.downloadUrl;
-
-  if (!videoUrl || !downloadUrl) {
+  if (!result.videoUrl || !result.downloadUrl) {
     panel.hidden = false;
     panel.classList.remove("hidden");
-    setStatus("The server marked the job ready but did not return video links.");
+    setStatus("The server did not return video links.");
     return;
   }
 
@@ -489,25 +372,21 @@ function showResult(result) {
   video.removeAttribute("src");
   video.load();
 
-  video.src = videoUrl;
+  video.src = result.videoUrl;
   video.load();
 
   video.onerror = () => {
-    setStatus(
-      "The video preview could not load. The file may have expired or the server restarted. Try creating it again."
-    );
+    setStatus("The video preview could not load. Try creating it again.");
   };
 
   video.onloadedmetadata = () => {
     setStatus("Preview loaded. Your video is ready to watch or download.");
   };
 
-  download.href = downloadUrl;
+  download.href = result.downloadUrl;
   download.hidden = false;
 
-  if ($("shortTitle")) {
-    $("shortTitle").textContent = "Your Short is ready";
-  }
+  if ($("shortTitle")) $("shortTitle").textContent = "Your Short is ready";
 
   const details = $("clipDetails");
 
@@ -529,11 +408,10 @@ function showResult(result) {
     }
   }
 
-  panel.scrollIntoView({
-    behavior: "smooth",
-    block: "start"
-  });
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+/* CREATE VIDEO */
 
 async function createShort() {
   if (activeRequest) {
@@ -562,9 +440,7 @@ async function createShort() {
   let manualClips = [];
 
   try {
-    if (mode === "manual") {
-      manualClips = getManualClips();
-    }
+    if (mode === "manual") manualClips = getManualClips();
   } catch (error) {
     setStatus(error.message);
     return;
@@ -610,15 +486,15 @@ async function createShort() {
       message: error.message || "Processing failed."
     });
   } finally {
-    if (token === pollToken) {
-      setButton(false, "Create my Short");
-    }
+    if (token === pollToken) setButton(false, "Create my Short");
   }
 }
 
 if (uploadBtn) {
   uploadBtn.addEventListener("click", createShort);
 }
+
+/* COPY NARRATION */
 
 if ($("copyBtn")) {
   $("copyBtn").addEventListener("click", async () => {
@@ -638,5 +514,4 @@ if ($("copyBtn")) {
   });
 }
 
-createModeControls();
 selectSource("upload");
