@@ -4,401 +4,161 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#10101b" />
-  <title>ReelNarrator AI</title>
-  <link rel="stylesheet" href="/style.css?v=5" />
-  <!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-9ZELSZTH67"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
+  <title>ReelNarrator Clipper</title>
 
-  gtag('config', 'G-9ZELSZTH67');
-</script>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-9ZELSZTH67"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-9ZELSZTH67');
+  </script>
+
+  <link rel="stylesheet" href="/style.css?v=6" />
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/">
-      <span class="brand-mark">R</span>
-      <span>ReelNarrator <small>AI</small></span>
-    </a>
-
-    <button id="menuToggle" class="icon-button" aria-label="Open menu"
-      aria-expanded="false">☰</button>
+    <a class="brand" href="/">ReelNarrator <span>Clipper</span></a>
+    <button id="menuToggle" class="icon-button" type="button" aria-label="Open menu">☰</button>
+    <nav id="mainMenu" class="menu hidden">
+      <a href="#clipperSection">Video Clipper</a>
+      <a href="#toolsSection">Tools</a>
+      <a href="#helpSection">How to use</a>
+    </nav>
   </header>
-
-  <nav id="mainMenu" class="menu hidden">
-    <a href="#createSection">Create recap</a>
-    <a href="#settingsSection">API settings</a>
-    <a href="#helpSection">How to use</a>
-  </nav>
 
   <main class="container">
     <section class="hero">
-      <span class="eyebrow">AI VIDEO WORKSPACE</span>
-      <h1>Turn movie clips into <span>narrated recaps.</span></h1>
-      <p>Choose scenes, create narration, review the script, and make your video.</p>
+      <p class="eyebrow">VIDEO CLIPPER</p>
+      <h1>Turn long videos into short clips.</h1>
+      <p>Upload a video, detect scene changes, choose your moments, and render clips in your preferred format.</p>
     </section>
 
-    <section id="settingsSection" class="panel">
+    <section id="clipperSection" class="panel">
       <div class="section-heading">
-        <div>
-          <span class="step-label">SETUP</span>
-          <h2>API settings</h2>
-        </div>
-        <span class="status-dot"></span>
+        <h2>1. Upload your video</h2>
+        <p>Use a video you own or have permission to edit.</p>
       </div>
 
-      <p class="muted">
-        Gemini features require your own API key. Groq is configured by the app.
-      </p>
-
-      <label for="geminiApiKey">Your Gemini API key</label>
-      <div class="input-with-button">
-        <input id="geminiApiKey" type="password"
-          placeholder="Paste your Gemini API key"
-          autocomplete="off" />
-        <button id="toggleGeminiKey" class="secondary-button" type="button">
-          Show
-        </button>
-      </div>
-
-      <label class="checkbox-row">
-        <input id="rememberGeminiKey" type="checkbox" />
-        <span>Remember key on this device</span>
+      <label class="upload-box" for="videoFile">
+        <span class="upload-icon">＋</span>
+        <strong>Choose a video</strong>
+        <span>MP4, MOV, or other supported video · Maximum 500 MB</span>
+        <input id="videoFile" type="file" accept="video/*" />
       </label>
 
+      <p id="selectedVideoName" class="status-message"></p>
+
       <div class="button-row">
-        <button id="saveGeminiKey" class="secondary-button" type="button">
-          Save key
-        </button>
-        <button id="clearGeminiKey" class="text-button" type="button">
-          Clear
-        </button>
+        <button id="uploadVideo" class="primary-button" type="button">Upload video</button>
+        <button id="scanScenes" class="secondary-button" type="button" disabled>Detect scene changes</button>
       </div>
 
-      <p id="apiKeyStatus" class="status-message" aria-live="polite"></p>
+      <p id="uploadStatus" class="status-message" aria-live="polite"></p>
 
-      <details class="help-card">
-        <summary>Where do I get a Gemini API key?</summary>
-        <p>
-          Open Google AI Studio, create an API key, then paste it above.
-          Gemini usage may require billing and is not guaranteed to be free.
-        </p>
-        <a href="https://aistudio.google.com/app/apikey"
-          target="_blank" rel="noopener noreferrer">
-          Open Google AI Studio
-        </a>
-      </details>
+      <div id="videoInfo" class="info-box hidden">
+        <strong>Video uploaded</strong>
+        <span id="videoDuration"></span>
+      </div>
     </section>
 
-    <section id="createSection" class="panel">
+    <section id="clipsSection" class="panel hidden">
       <div class="section-heading">
-        <div>
-          <span class="step-label">STEP 1</span>
-          <h2>Choose your video</h2>
-        </div>
-      </div>
-
-      <label for="movieVideo">Upload a video you have permission to use</label>
-      <div class="upload-box">
-        <input id="movieVideo" type="file" accept="video/*" />
-        <p class="muted">Select a video from your device.</p>
-        <p id="selectedVideoName" class="status-message"></p>
+        <h2>2. Choose your clips</h2>
+        <p>Detected scene changes are suggestions. You can also enter clip times manually.</p>
       </div>
 
       <div class="field-grid">
-        <div>
-          <label for="sceneMode">Scene selection</label>
-          <select id="sceneMode">
-            <option value="auto">Auto-select scenes with AI</option>
-            <option value="manual">I’ll choose timestamps</option>
+        <label class="field">
+          <span>Clip duration</span>
+          <select id="clipDuration">
+            <option value="20">20–30 seconds</option>
+            <option value="30" selected>30–60 seconds</option>
+            <option value="60">60–90 seconds</option>
+            <option value="90">90 seconds–2 minutes</option>
+            <option value="120">2–3 minutes</option>
+            <option value="180">3–5 minutes</option>
+            <option value="custom">Custom duration</option>
           </select>
-        </div>
+        </label>
 
-        <div>
-          <label for="videoFormat">Video format</label>
+        <label class="field">
+          <span>Video format</span>
           <select id="videoFormat">
-            <option value="9:16">Vertical — Shorts / TikTok</option>
-            <option value="16:9">Landscape — YouTube</option>
-            <option value="1:1">Square</option>
+            <option value="9:16" selected>9:16 · TikTok / Shorts</option>
+            <option value="16:9">16:9 · YouTube</option>
+            <option value="1:1">1:1 · Square</option>
           </select>
-        </div>
-
-        <div>
-          <label for="targetDuration">Target video length</label>
-          <select id="targetDuration">
-            <option value="30">About 30 seconds</option>
-            <option value="45">About 45 seconds</option>
-            <option value="60" selected>About 1 minute</option>
-            <option value="90">About 1 minute 30 seconds</option>
-          </select>
-        </div>
-
-        <div>
-          <label for="recapStyle">Narration style</label>
-          <select id="recapStyle">
-            <option value="natural">Natural storytelling</option>
-            <option value="dramatic">Dramatic</option>
-            <option value="fast">Fast-paced recap</option>
-            <option value="simple">Simple and clear</option>
-          </select>
-        </div>
+        </label>
       </div>
 
-      <div id="manualScenes" class="manual-scenes hidden">
-        <div class="section-heading">
-          <div>
-            <h3>Choose scenes</h3>
-            <p class="muted">Add timestamps in the order they happen.</p>
-          </div>
-          <button id="addScene" class="secondary-button" type="button">
-            + Add scene
-          </button>
-        </div>
-
-        <div id="sceneList"></div>
+      <div id="customDurationBox" class="field hidden">
+        <label for="customDuration">Custom clip length in seconds</label>
+        <input id="customDuration" type="number" min="5" max="300" value="45" />
       </div>
-
-      <details class="help-card">
-        <summary>What is Auto or Manual selection?</summary>
-        <p>
-          <strong>Auto:</strong> AI studies the uploaded video and selects
-          scenes for the recap.
-        </p>
-        <p>
-          <strong>Manual:</strong> You enter the start and end times of scenes.
-          AI still needs to analyze those selected moments to understand them.
-        </p>
-      </details>
-    </section>
-
-    <section class="panel">
-      <div class="section-heading">
-        <div>
-          <span class="step-label">STEP 2</span>
-          <h2>Narration settings</h2>
-        </div>
-      </div>
-
-      <div class="field-grid">
-        <div>
-          <label for="voiceType">Voice</label>
-          <select id="voiceType">
-            <option value="female">Female narrator</option>
-            <option value="male">Male narrator</option>
-          </select>
-        </div>
-
-        <div>
-          <label for="voiceAccent">Accent</label>
-          <select id="voiceAccent">
-            <option value="neutral">Neutral English</option>
-            <option value="british">British English</option>
-            <option value="american">American English</option>
-            <option value="nigerian">Nigerian English</option>
-          </select>
-        </div>
-
-        <div>
-          <label for="voiceSpeed">Speaking speed</label>
-          <select id="voiceSpeed">
-            <option value="slow">Slow</option>
-            <option value="normal" selected>Normal</option>
-            <option value="fast">Fast</option>
-          </select>
-        </div>
-      </div>
-
-      <label for="scriptInstructions">Extra narration instructions (optional)</label>
-      <textarea id="scriptInstructions" rows="3"
-        placeholder="Example: Keep it simple, explain the story clearly, and avoid character names."></textarea>
-
-      <label class="checkbox-row">
-        <input id="includeCaptions" type="checkbox" checked />
-        <span>Add captions to the finished video</span>
-      </label>
-
-      <div id="captionSettings" class="field-grid">
-        <div>
-          <label for="captionPosition">Caption position</label>
-          <select id="captionPosition">
-            <option value="bottom">Bottom</option>
-            <option value="middle">Middle</option>
-            <option value="top">Top</option>
-          </select>
-        </div>
-
-        <div>
-          <label for="captionSize">Caption size</label>
-          <select id="captionSize">
-            <option value="small">Small</option>
-            <option value="normal" selected>Normal</option>
-            <option value="large">Large</option>
-          </select>
-        </div>
-
-        <div>
-          <label for="captionColor">Caption color</label>
-          <select id="captionColor">
-            <option value="white">White</option>
-            <option value="yellow">Yellow</option>
-            <option value="cyan">Cyan</option>
-          </select>
-        </div>
-      </div>
-
-      <details class="help-card">
-        <summary>What do narration and caption settings do?</summary>
-        <p>
-          Narration settings control the AI voice and how it speaks.
-          Extra instructions guide the writing style.
-        </p>
-        <p>
-          Captions display the spoken narration as text on the video.
-          You can choose their position, size, and color.
-        </p>
-      </details>
-    </section>
-
-    <section class="panel">
-      <div class="section-heading">
-        <div>
-          <span class="step-label">STEP 3</span>
-          <h2>Create your recap</h2>
-        </div>
-      </div>
-
-      <p class="muted">
-        The app will analyze scenes and prepare a narration script for you
-        to review before generating the final voice and video.
-      </p>
-
-      <button id="createShort" class="primary-button" type="button">
-        Create recap
-      </button>
-
-      <div id="progressSection" class="progress-section hidden">
-        <div class="progress-heading">
-          <span id="progressMessage">Preparing...</span>
-          <span id="progressPercent">0%</span>
-        </div>
-        <div class="progress-track">
-          <div id="progressBar" class="progress-bar"></div>
-        </div>
-      </div>
-
-      <p id="createStatus" class="status-message" aria-live="polite"></p>
-    </section>
-
-    <section id="scriptSection" class="panel hidden">
-      <div class="section-heading">
-        <div>
-          <span class="step-label">STEP 4</span>
-          <h2>Review narration</h2>
-        </div>
-      </div>
-
-      <p class="muted">
-        Read through the script and edit anything that sounds wrong before
-        generating the voice.
-      </p>
-
-      <div id="sceneScriptList"></div>
-
-      <label for="fullNarration">Full narration</label>
-      <textarea id="fullNarration" rows="8"></textarea>
 
       <div class="button-row">
-        <button id="regenerateScript" class="secondary-button" type="button">
-          Regenerate script
-        </button>
-        <button id="generateFinalVideo" class="primary-button" type="button">
-          Generate voice & video
-        </button>
-      </div>
-    </section>
-
-    <section id="resultSection" class="panel hidden">
-      <div class="section-heading">
-        <div>
-          <span class="step-label">COMPLETE</span>
-          <h2>Your recap</h2>
-        </div>
+        <button id="autoSelectClips" class="secondary-button" type="button">Suggest clips</button>
+        <button id="addManualClip" class="secondary-button" type="button">＋ Add clip manually</button>
       </div>
 
-      <video id="resultVideo" controls playsinline></video>
+      <div id="sceneNotice" class="status-message"></div>
+      <div id="clipList" class="clip-list"></div>
 
       <div class="button-row">
-        <a id="downloadVideo" class="primary-button" href="#" download>
-          Download video
-        </a>
+        <button id="renderClips" class="primary-button" type="button" disabled>Render selected clips</button>
+      </div>
+
+      <p id="renderStatus" class="status-message" aria-live="polite"></p>
+    </section>
+
+    <section id="resultsSection" class="panel hidden">
+      <div class="section-heading">
+        <h2>3. Your clips</h2>
+        <p>Preview or download each rendered clip.</p>
+      </div>
+      <div id="resultsList" class="results-list"></div>
+    </section>
+
+    <section id="toolsSection" class="panel">
+      <div class="section-heading">
+        <h2>Clipper tools</h2>
+        <p>More editing tools can be added after the core clip workflow is tested.</p>
+      </div>
+      <div class="help-grid">
+        <article class="help-card">
+          <h3>Scene detection</h3>
+          <p>Finds visual changes in a video. It does not understand which moments are viral or most interesting.</p>
+        </article>
+        <article class="help-card">
+          <h3>Manual cutting</h3>
+          <p>Choose exact start and end times for the parts you want.</p>
+        </article>
+        <article class="help-card">
+          <h3>Vertical resizing</h3>
+          <p>Crop videos into 9:16, 16:9, or square format.</p>
+        </article>
       </div>
     </section>
 
     <section id="helpSection" class="panel">
       <div class="section-heading">
-        <div>
-          <span class="step-label">HELP CENTER</span>
-          <h2>How to use ReelNarrator</h2>
-        </div>
+        <h2>How to use</h2>
       </div>
-
-      <details class="help-card" open>
-        <summary>1. Set up Gemini</summary>
-        <p>
-          Add your own Gemini API key in API Settings. Gemini is used for
-          video understanding and voice features that require it.
-        </p>
-      </details>
-
-      <details class="help-card">
-        <summary>2. Upload a video</summary>
-        <p>
-          Choose a video stored on your device. Use content you own or have
-          permission to edit.
-        </p>
-      </details>
-
-      <details class="help-card">
-        <summary>3. Select scenes</summary>
-        <p>
-          Auto lets AI select scenes. Manual lets you enter timestamps.
-          Keep scenes chronological so the recap follows the story.
-        </p>
-      </details>
-
-      <details class="help-card">
-        <summary>4. Review the narration</summary>
-        <p>
-          Check that the script explains what is happening and matches
-          the selected footage. Edit or regenerate it before making the video.
-        </p>
-      </details>
-
-      <details class="help-card">
-        <summary>5. Generate and download</summary>
-        <p>
-          Once the narration is ready, generate the voice and video.
-          Preview the result, then download it to your device.
-        </p>
-      </details>
-
-      <details class="help-card">
-        <summary>Why did my job fail?</summary>
-        <p>
-          Common reasons include an invalid API key, provider quota limits,
-          unsupported video files, or a video that is too large.
-          Check the error message and try again when the provider is available.
-        </p>
-      </details>
+      <ol class="steps-list">
+        <li>Choose and upload your video.</li>
+        <li>Detect scene changes or add clip times manually.</li>
+        <li>Select the clips you want and choose the output format.</li>
+        <li>Render, preview, and download your clips.</li>
+      </ol>
+      <p class="status-message">Keep this page open while clips are rendering. Large videos may take time on your phone or server.</p>
     </section>
-
-    <footer class="footer">
-      ReelNarrator AI · Create responsibly
-    </footer>
   </main>
 
-  <script src="/app.js?v=5"></script>
+  <footer class="footer">
+    <p>ReelNarrator Clipper</p>
+  </footer>
+
+  <script src="/app.js?v=6"></script>
 </body>
-  </html>
+</html>
